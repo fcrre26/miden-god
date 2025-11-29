@@ -1,5 +1,5 @@
 #!/bin/bash
-# miden-god.sh —— 2025.11.30 宇宙最强完整版（基于官方文档修复）
+# miden-god.sh —— 2025.11.30 宇宙最强完整版（修复构建工具问题）
 set -e
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; NC='\033[0m'
@@ -26,9 +26,25 @@ banner() {
 ${NC}"
 }
 
-# 1) 一键安装所有依赖（基于官方文档修复）
+# 1) 一键安装所有依赖（修复构建工具问题）
 install_deps() {
   echo -e "${YELLOW}正在安装所有依赖...${NC}"
+  
+  # 首先安装系统构建工具
+  echo -e "${YELLOW}安装系统构建工具...${NC}"
+  if command -v apt &>/dev/null; then
+    sudo apt update -qq
+    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains-ng
+  elif command -v yum &>/dev/null; then
+    sudo yum groupinstall -y "Development Tools"
+    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains
+  elif command -v dnf &>/dev/null; then
+    sudo dnf groupinstall -y "Development Tools"
+    sudo dnf install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng
+  else
+    echo -e "${RED}无法识别包管理器，请手动安装构建工具${NC}"
+    return 1
+  fi
   
   # 检查并安装 Rust
   if ! command -v rustc &>/dev/null; then
@@ -43,30 +59,46 @@ install_deps() {
   if ! command -v miden &>/dev/null; then
     echo -e "${YELLOW}安装 Miden 开发工具...${NC}"
     
-    # 安装 midenup
-    echo -e "${YELLOW}安装 midenup...${NC}"
-    cargo install --git https://github.com/0xMiden/midenup.git
-    
-    # 初始化 midenup
-    echo -e "${YELLOW}初始化 midenup...${NC}"
-    midenup init
-    
-    # 配置 PATH
-    echo -e "${YELLOW}配置 PATH...${NC}"
-    MIDENUP_HOME=$(midenup show home)
-    export PATH="$MIDENUP_HOME/bin:$PATH"
-    
-    # 安装稳定版工具链
-    echo -e "${YELLOW}安装 Miden 工具链...${NC}"
-    midenup install stable
+    # 首先尝试直接安装 miden-client（更可靠）
+    echo -e "${YELLOW}方法1: 直接安装 miden-client...${NC}"
+    if cargo install --git https://github.com/0xPolygonMiden/miden-client --features testing,concurrent --locked; then
+      echo -e "${GREEN}miden-client 安装成功！${NC}"
+    else
+      echo -e "${YELLOW}方法1失败，尝试方法2: 安装 midenup...${NC}"
+      
+      # 安装 midenup
+      if cargo install --git https://github.com/0xMiden/midenup.git; then
+        echo -e "${YELLOW}初始化 midenup...${NC}"
+        midenup init
+        
+        # 配置 PATH
+        echo -e "${YELLOW}配置 PATH...${NC}"
+        MIDENUP_HOME=$(midenup show home 2>/dev/null || echo "$HOME/.local/share/midenup")
+        export PATH="$MIDENUP_HOME/bin:$PATH"
+        echo "export PATH=\"$MIDENUP_HOME/bin:\$PATH\"" >> ~/.bashrc
+        
+        # 安装稳定版工具链
+        echo -e "${YELLOW}安装 Miden 工具链...${NC}"
+        midenup install stable
+      else
+        echo -e "${RED}所有安装方法都失败了${NC}"
+        echo "请手动安装: cargo install --git https://github.com/0xPolygonMiden/miden-client --features testing,concurrent --locked"
+        return 1
+      fi
+    fi
     
     # 验证安装
     if command -v miden &>/dev/null; then
       echo -e "${GREEN}Miden 工具链安装完成！${NC}"
     else
-      echo -e "${RED}Miden 安装失败，尝试备用方法...${NC}"
-      # 备用方法：直接安装客户端
-      cargo install --git https://github.com/0xPolygonMiden/miden-client --features testing,concurrent --locked
+      echo -e "${YELLOW}Miden 安装完成但命令不在 PATH 中，尝试手动设置...${NC}"
+      # 尝试常见路径
+      export PATH="$HOME/.cargo/bin:$PATH"
+      if command -v miden &>/dev/null; then
+        echo -e "${GREEN}找到 miden 命令！${NC}"
+      else
+        echo -e "${RED}请手动将 ~/.cargo/bin 添加到 PATH${NC}"
+      fi
     fi
   else
     echo -e "${GREEN}Miden 已安装${NC}"
@@ -76,18 +108,6 @@ install_deps() {
   echo -e "${YELLOW}初始化 Miden 客户端配置...${NC}"
   miden client init --network testnet 2>/dev/null || true
   
-  echo -e "${YELLOW}安装系统依赖...${NC}"
-  if command -v apt &>/dev/null; then
-    sudo apt update -qq 2>/dev/null || true
-    sudo apt install -y proxychains-ng python3-pip unzip wget curl >/dev/null 2>&1 || true
-  elif command -v yum &>/dev/null; then
-    sudo yum install -y proxychains python3-pip unzip wget curl >/dev/null 2>&1 || true
-  elif command -v brew &>/dev/null; then
-    brew install proxychains-ng python git wget >/dev/null 2>&1 || true
-  else
-    echo -e "${YELLOW}无法自动安装系统依赖，请手动安装${NC}"
-  fi
-  
   echo -e "${YELLOW}安装 Python 依赖...${NC}"
   pip3 install --quiet selenium >/dev/null 2>&1 || {
     echo -e "${YELLOW}使用 pip 安装 selenium...${NC}"
@@ -96,22 +116,31 @@ install_deps() {
   
   echo -e "${YELLOW}安装 Chrome Driver...${NC}"
   if ! command -v chromedriver &>/dev/null; then
-    wget -q https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/131.0.6778.85/linux64/chromedriver-linux64.zip ||
-    wget -q https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.85/linux64/chromedriver-linux64.zip
-    unzip -q chromedriver-linux64.zip
-    sudo mv chromedriver-linux64/chromedriver /usr/local/bin/ 2>/dev/null || 
-    sudo cp chromedriver-linux64/chromedriver /usr/local/bin/ 2>/dev/null ||
-    mkdir -p ~/.local/bin &&
-    cp chromedriver-linux64/chromedriver ~/.local/bin/ 2>/dev/null
-    sudo chmod +x /usr/local/bin/chromedriver 2>/dev/null || true
-    chmod +x ~/.local/bin/chromedriver 2>/dev/null || true
-    rm -rf chromedriver-linux64* 2>/dev/null || true
-    export PATH="$HOME/.local/bin:$PATH"
+    # 尝试多个下载源
+    if wget -q https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/131.0.6778.85/linux64/chromedriver-linux64.zip; then
+      echo -e "${GREEN}从 Google 下载成功${NC}"
+    elif wget -q https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.85/linux64/chromedriver-linux64.zip; then
+      echo -e "${GREEN}从备用源下载成功${NC}"
+    else
+      echo -e "${YELLOW}无法下载 chromedriver，跳过${NC}"
+    fi
+    
+    if [[ -f chromedriver-linux64.zip ]]; then
+      unzip -q chromedriver-linux64.zip
+      sudo mv chromedriver-linux64/chromedriver /usr/local/bin/ 2>/dev/null || 
+      sudo cp chromedriver-linux64/chromedriver /usr/local/bin/ 2>/dev/null ||
+      (mkdir -p ~/.local/bin && cp chromedriver-linux64/chromedriver ~/.local/bin/)
+      sudo chmod +x /usr/local/bin/chromedriver 2>/dev/null || true
+      chmod +x ~/.local/bin/chromedriver 2>/dev/null || true
+      rm -rf chromedriver-linux64*
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
   else
     echo -e "${GREEN}Chrome Driver 已安装${NC}"
   fi
   
   echo -e "${GREEN}所有依赖安装完成！${NC}"
+  echo -e "${YELLOW}如果遇到问题，请运行: source ~/.bashrc${NC}"
 }
 
 # 2) 无限生成钱包（修复版）
@@ -186,7 +215,7 @@ gen_unlimited() {
   read -p "按回车继续"
 }
 
-# 3) 启动全自动刷子（修复命令格式）
+# 3) 启动全自动刷子（使用改进版faucet函数）
 start_brush() {
   if ! command -v miden &>/dev/null; then
     echo -e "${RED}错误: Miden 客户端未安装，请先运行选项1安装依赖${NC}"
@@ -200,9 +229,10 @@ start_brush() {
 import time,random,subprocess,glob,os
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # 切换到第一个钱包目录作为工作目录（包含正确的配置）
 wallet_dirs = glob.glob("miden_wallets/wallet_*")
@@ -212,18 +242,108 @@ if wallet_dirs:
 files = glob.glob("miden_wallets/batch_*.txt")
 accounts = [l.strip() for f in files for l in open(f) if l.strip()]
 
-def faucet(a):
-    try:
-        o=Options(); o.add_argument('--headless'); o.add_argument('--no-sandbox')
-        d=webdriver.Chrome(options=o)
-        d.get("https://faucet.testnet.miden.io/")
-        WebDriverWait(d,12).until(EC.presence_of_element_located((By.NAME,"recipient-address"))).send_keys(a)
-        if random.random()<0.22:
-            try: d.find_element(By.ID,"public-note-radio").click()
-            except: pass
-        d.find_element(By.CSS_SELECTOR,"button[type=submit],.btn-request").click()
-        time.sleep(7); d.quit()
-    except: pass
+def faucet(addr, max_retries=3):
+    """
+    自动化领取Miden测试币 - 改进版
+    
+    Args:
+        addr: Miden账户地址
+        max_retries: 最大重试次数
+    """
+    driver = None
+    for attempt in range(max_retries):
+        try:
+            print(f"[{time.strftime('%H:%M:%S')}] 尝试领取测试币 (第 {attempt + 1} 次)...")
+            
+            # 浏览器配置
+            o = Options()
+            o.add_argument('--headless')
+            o.add_argument('--no-sandbox')
+            o.add_argument('--disable-dev-shm-usage')
+            o.add_argument('--disable-blink-features=AutomationControlled')
+            o.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+            o.add_experimental_option("excludeSwitches", ["enable-automation"])
+            o.add_experimental_option('useAutomationExtension', False)
+
+            driver = webdriver.Chrome(options=o)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => false})")
+            driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            })
+
+            # 访问水龙头页面
+            driver.get("https://faucet.testnet.miden.io/")
+            
+            # 等待页面加载完成
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            # 检查页面是否正常加载
+            if "Miden" not in driver.title:
+                raise Exception("页面加载异常")
+
+            # 1. 填写地址
+            address_input = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.NAME, "recipient-address"))
+            )
+            address_input.clear()
+            address_input.send_keys(addr)
+            
+            # 2. 选择金额
+            amount_select = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.NAME, "token-amount"))
+            )
+            select = Select(amount_select)
+            select.select_by_visible_text("1000")
+            
+            # 3. 随机选择笔记类型
+            if random.random() < 0.2:
+                public_btn = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'SEND PUBLIC NOTE')]"))
+                )
+                public_btn.click()
+                note_type = "Public"
+            else:
+                private_btn = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'SEND PRIVATE NOTE')]"))
+                )
+                private_btn.click()
+                note_type = "Private"
+
+            # 4. 等待成功消息
+            success_element = WebDriverWait(driver, 90).until(
+                EC.presence_of_element_located((By.XPATH, 
+                    "//div[contains(text(),'Successfully minted') or contains(text(),'Success') or contains(text(),'successfully')]"))
+            )
+            
+            print(f"✅ [{time.strftime('%H:%M:%S')}] 领取成功 +1000 | {addr[:12]}... | {note_type} Note")
+            driver.quit()
+            return True
+            
+        except TimeoutException:
+            print(f"❌ [{time.strftime('%H:%M:%S')}] 超时 - 第 {attempt + 1} 次尝试失败")
+        except NoSuchElementException as e:
+            print(f"❌ [{time.strftime('%H:%M:%S')}] 元素未找到: {e}")
+        except Exception as e:
+            print(f"❌ [{time.strftime('%H:%M:%S')}] 错误: {str(e)}")
+        
+        finally:
+            # 确保浏览器关闭
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+        
+        # 如果不是最后一次尝试，等待一段时间再重试
+        if attempt < max_retries - 1:
+            wait_time = random.randint(10, 30)
+            print(f"⏳ 等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
+    
+    print(f"💥 [{time.strftime('%H:%M:%S')}] 所有 {max_retries} 次尝试都失败了")
+    return False
 
 def tx(a):
     r=random.randint(1,100); amt=round(random.uniform(0.000123,0.8888),6)
@@ -364,9 +484,9 @@ menu() {
   while true; do
     banner
     echo -e "${BLUE}=== Miden 0撸终极神器 ===${NC}"
-    echo "1) 一键安装所有依赖（官方推荐方法）"
+    echo "1) 一键安装所有依赖（修复构建工具）"
     echo "2) 无限生成钱包（修复版）"
-    echo "3) 启动全自动刷子（修复命令格式）"
+    echo "3) 启动全自动刷子（改进版faucet）"
     echo "4) 停止刷子"
     echo "5) 查看账户信息"
     echo "6) 查看实时日志"
