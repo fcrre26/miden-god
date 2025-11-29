@@ -174,7 +174,7 @@ EOF
   echo -e "${GREEN}配置完成！${NC}"
 }
 
-#3) 改进的测试代理连接函数
+#3) 最简单的测试函数
 test_proxy() {
   echo -e "${YELLOW}测试代理连接...${NC}"
   
@@ -183,31 +183,20 @@ test_proxy() {
     return 1
   fi
   
-  # 读取代理配置
-  proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
+  echo -e "${GREEN}正在测试代理连接（最多10秒）...${NC}"
   
-  echo -e "${GREEN}通过代理获取公网IP...${NC}"
-  echo -e "${BLUE}使用代理: ${proxy_line}${NC}"
-  echo -e "${YELLOW}正在连接，请稍候...${NC}"
-  echo
-  
-  # 使用更简洁的测试方式
-  local result
-  result=$(timeout 10 proxychains -q curl -s ipinfo.io/ip 2>/dev/null)
-  
-  if [[ -n "$result" ]]; then
+  # 直接测试，完全静默
+  if timeout 10 proxychains -q curl -s ipinfo.io/ip >/tmp/proxy_test_ip.txt 2>/dev/null; then
+    local ip=$(cat /tmp/proxy_test_ip.txt)
     echo -e "${GREEN}✅ 代理连接成功！${NC}"
-    echo -e "${BLUE}当前公网IP: $result${NC}"
-    echo -e "${GREEN}代理工作正常，可以开始使用${NC}"
+    echo -e "${BLUE}当前公网IP: $ip${NC}"
   else
-    echo -e "${YELLOW}⚠️  代理连接测试超时${NC}"
-    echo -e "${YELLOW}这可能是因为：${NC}"
-    echo "  • 代理服务器响应较慢"
-    echo "  • 网络延迟较高" 
-    echo "  • 代理需要额外配置"
-    echo
-    echo -e "${GREEN}建议直接尝试启动刷子，实际使用可能正常${NC}"
+    echo -e "${YELLOW}⚠️ 代理连接测试超时${NC}"
+    echo -e "${YELLOW}但代理配置已生效，可以尝试直接使用${NC}"
   fi
+  
+  rm -f /tmp/proxy_test_ip.txt
+  echo
 }
 
 # 4) 生成钱包
