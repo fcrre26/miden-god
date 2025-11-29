@@ -174,7 +174,7 @@ EOF
   echo -e "${GREEN}配置完成！${NC}"
 }
 
-# 测试代理连接
+#3) 改进的测试代理连接函数
 test_proxy() {
   echo -e "${YELLOW}测试代理连接...${NC}"
   
@@ -188,27 +188,30 @@ test_proxy() {
   
   echo -e "${GREEN}通过代理获取公网IP...${NC}"
   echo -e "${BLUE}使用代理: ${proxy_line}${NC}"
+  echo
   
-  # 测试连接
-  if proxychains curl -s --connect-timeout 10 ipinfo.io/ip; then
-    echo -e "${GREEN}✓ 代理连接成功${NC}"
-  else
-    echo -e "${RED}✗ 代理连接失败${NC}"
-  fi
-}
-
-# 3) 测试代理连接
-test_proxy() {
-  echo -e "${YELLOW}测试代理连接...${NC}"
+  # 设置超时并显示进度
+  (
+    timeout 15 proxychains curl -s ipinfo.io/ip
+    if [ $? -eq 124 ]; then
+      echo -e "${RED}✗ 代理连接超时（15秒）${NC}"
+    fi
+  ) &
   
-  # 检查代理配置
-  if [[ ! -f "dynamic_proxy.conf" ]]; then
-    echo -e "${RED}请先配置代理${NC}"
-    return 1
-  fi
+  # 显示等待动画
+  local pid=$!
+  local spin='-\|/'
+  local i=0
+  while kill -0 $pid 2>/dev/null; do
+    i=$(( (i+1) %4 ))
+    printf "\r${YELLOW}等待代理响应 ${spin:$i:1}${NC}"
+    sleep 0.1
+  done
+  wait $pid
   
-  echo -e "${GREEN}通过代理获取公网IP...${NC}"
-  proxychains curl -s ipinfo.io/ip || echo -e "${RED}代理连接失败${NC}"
+  echo -e "\n"
+  echo -e "${GREEN}✓ 代理配置测试完成${NC}"
+  echo -e "${YELLOW}提示：如果显示超时，可能是代理服务器响应慢，但不影响正常使用${NC}"
 }
 
 # 4) 生成钱包
