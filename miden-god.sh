@@ -24,6 +24,48 @@ banner() {
 ${NC}"
 }
 
+# 获取简洁的 Miden 版本信息
+get_miden_version() {
+    if command -v miden &>/dev/null; then
+        version=$(miden --version 2>/dev/null | grep -o 'miden [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 | sed 's/miden //')
+        if [[ -n "$version" ]]; then
+            echo "$version"
+        else
+            echo "已安装"
+        fi
+    else
+        echo "未安装"
+    fi
+}
+
+# 获取代理信息
+get_proxy_info() {
+    if [[ -f "dynamic_proxy.conf" ]]; then
+        proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
+        if [[ "$proxy_line" == http* ]]; then
+            temp="${proxy_line#http://}"
+            ip_port="${temp#*@}"
+            IFS=':' read -r ip port <<< "$ip_port"
+            echo "$ip:$port"
+        else
+            IFS=':' read -r ip port user pass <<< "$proxy_line"
+            echo "$ip:$port"
+        fi
+    else
+        echo "未配置"
+    fi
+}
+
+# 获取钱包数量
+get_wallet_count() {
+    if [[ -f "$ACCOUNTS_DIR/batch_accounts.txt" ]]; then
+        count=$(wc -l < "$ACCOUNTS_DIR/batch_accounts.txt" 2>/dev/null || echo 0)
+        echo "$count"
+    else
+        echo "0"
+    fi
+}
+
 # 1) 一键安装所有依赖
 install_deps() {
   echo -e "${YELLOW}正在安装所有依赖...${NC}"
@@ -31,10 +73,10 @@ install_deps() {
   # 安装系统构建工具
   if command -v apt &>/dev/null; then
     sudo apt update -qq
-    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains-4
+    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains-4 libsqlite3-dev
   elif command -v yum &>/dev/null; then
     sudo yum groupinstall -y "Development Tools"
-    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng
+    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng sqlite-devel
   fi
   
   # 安装 Rust
@@ -42,18 +84,32 @@ install_deps() {
     echo -e "${YELLOW}安装 Rust...${NC}"
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     source "$HOME/.cargo/env"
+  else
+    echo -e "${GREEN}Rust 已安装${NC}"
   fi
+  
+  # 设置环境变量
+  export PATH="$HOME/.cargo/bin:$PATH"
+  echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
   
   # 安装 Miden
   if ! command -v miden &>/dev/null; then
     echo -e "${YELLOW}安装 Miden 客户端...${NC}"
     cargo install --git https://github.com/0xPolygonMiden/miden-client --features testing,concurrent --locked
+  else
+    echo -e "${GREEN}Miden 客户端已安装${NC}"
   fi
   
   # 安装 Python 依赖
+  echo -e "${YELLOW}安装 Python 依赖...${NC}"
   pip3 install --quiet selenium
   
+  # 初始化客户端
+  echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
+  miden client init --network testnet 2>/dev/null || true
+  
   echo -e "${GREEN}所有依赖安装完成！${NC}"
+  echo -e "${YELLOW}请运行: source ~/.bashrc${NC}"
 }
 
 # 2) 配置动态代理（直接录入完整字符串）
@@ -78,9 +134,9 @@ setup_dynamic_proxy() {
   echo "IP:端口:用户名:密码"
   echo
   echo -e "${BLUE}实际示例:${NC}"
-  echo "ip:端口:用户名:密码"
+  echo "74.81.81.81:823:username:password"
   echo "或"
-  echo "http://用户名:密码@ip:端口"
+  echo "http://username:password@74.81.81.81:823"
   echo
   
   read -p "请输入代理信息: " proxy_input
@@ -124,7 +180,7 @@ EOF
   apply_proxy_config
 }
 
-# 应用到系统（适配新格式）
+# 应用到系统
 apply_proxy_config() {
   if [[ ! -f "dynamic_proxy.conf" ]]; then
     echo -e "${RED}✗ 代理配置文件不存在${NC}"
@@ -174,7 +230,7 @@ EOF
   echo -e "${GREEN}配置完成！${NC}"
 }
 
-#3) 最简单的测试函数
+# 3) 测试代理连接
 test_proxy() {
   echo -e "${YELLOW}测试代理连接...${NC}"
   
@@ -199,42 +255,114 @@ test_proxy() {
   echo
 }
 
-# 4) 生成钱包
-gen_wallets() {
-  if ! command -v miden &>/dev/null; then
-    echo -e "${RED}错误: Miden 客户端未安装${NC}"
-    return 1
-  fi
-  
-  read -p "生成多少个钱包？(默认10) > " total
-  total=${total:-10}
-  
-  echo -e "${YELLOW}开始生成 $total 个钱包...${NC}"
-  
-  success_count=0
-  for ((i=1;i<=total;i++)); do
-    printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d${NC}" $((i*100/total)) $i $total $success_count
+# 4) 修复 Miden 客户端配置
+fix_miden_client() {
+    echo -e "${YELLOW}修复 Miden 客户端配置...${NC}"
     
-    WALLET_DIR="$ACCOUNTS_DIR/wallet_$i"
-    mkdir -p "$WALLET_DIR"
-    cd "$WALLET_DIR"
+    # 设置环境变量
+    export PATH="$HOME/.cargo/bin:$PATH"
+    echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
+    source ~/.bashrc
     
-    if miden client new-wallet --deploy --testing 2>/dev/null; then
-      # 获取账户地址
-      addr=$(miden client account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
-      if [[ -n "$addr" ]]; then
-        echo "$addr" >> "../batch_accounts.txt"
-        ((success_count++))
-      fi
+    # 重新初始化客户端
+    echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
+    miden client init --network testnet 2>/dev/null || true
+    
+    # 验证安装
+    if command -v miden &>/dev/null; then
+        echo -e "${GREEN}✅ Miden 客户端已正确配置${NC}"
+        version=$(get_miden_version)
+        echo -e "${BLUE}客户端版本: $version${NC}"
+    else
+        echo -e "${RED}❌ Miden 客户端配置失败${NC}"
+        echo -e "${YELLOW}尝试重新安装...${NC}"
+        cargo install --git https://github.com/0xPolygonMiden/miden-client --features testing,concurrent --locked
     fi
-    
-    cd - >/dev/null
-  done
-  
-  echo -e "\n${GREEN}生成完成！成功: $success_count/$total${NC}"
 }
 
-# 5) 启动动态代理刷子
+# 5) 生成钱包地址（使用自有IP）
+gen_wallets() {
+    echo -e "${YELLOW}检查 Miden 客户端状态...${NC}"
+    
+    # 确保环境变量正确
+    export PATH="$HOME/.cargo/bin:$PATH"
+    
+    if ! command -v miden &>/dev/null; then
+        echo -e "${RED}错误: Miden 客户端未安装，请先运行选项1安装依赖${NC}"
+        return 1
+    fi
+    
+    read -p "生成多少个钱包？(默认10) > " total
+    total=${total:-10}
+    
+    echo -e "${YELLOW}开始生成 $total 个钱包...${NC}"
+    echo -e "${YELLOW}这可能需要几分钟时间...${NC}"
+    echo -e "${GREEN}注意：生成钱包使用自有IP，不走代理${NC}"
+    
+    # 确保在正确的目录
+    cd "$(pwd)"
+    
+    # 临时禁用代理（使用自有IP）
+    if [[ -f "/etc/proxychains.conf" ]]; then
+        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak
+        echo -e "${YELLOW}已临时禁用代理，使用自有IP生成钱包${NC}"
+    fi
+    
+    success_count=0
+    for ((i=1;i<=total;i++)); do
+        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d${NC}" $((i*100/total)) $i $total $success_count
+        
+        WALLET_DIR="$ACCOUNTS_DIR/wallet_$i"
+        mkdir -p "$WALLET_DIR"
+        cd "$WALLET_DIR"
+        
+        # 创建新钱包（不使用代理）
+        if miden client new-wallet --deploy --testing 2>/dev/null; then
+            # 获取账户地址
+            addr=$(miden client account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
+            if [[ -n "$addr" ]]; then
+                echo "$addr" >> "../batch_accounts.txt"
+                ((success_count++))
+                printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d - 地址: ${addr:0:12}...${NC}" $((i*100/total)) $i $total $success_count
+            fi
+        fi
+        
+        cd - >/dev/null
+    done
+    
+    # 恢复代理配置
+    if [[ -f "/etc/proxychains.conf.bak" ]]; then
+        sudo mv /etc/proxychains.conf.bak /etc/proxychains.conf
+        echo -e "${GREEN}已恢复代理配置${NC}"
+    fi
+    
+    echo -e "\n${GREEN}生成完成！成功: $success_count/$total${NC}"
+    
+    if [[ $success_count -eq 0 ]]; then
+        echo -e "${RED}所有钱包生成都失败了！${NC}"
+        echo -e "${YELLOW}可能的原因：${NC}"
+        echo "1. Miden 客户端未正确安装"
+        echo "2. 网络连接问题" 
+        echo "3. 测试网服务暂时不可用"
+        echo -e "${YELLOW}建议先运行选项1或4修复依赖${NC}"
+    else
+        echo -e "${GREEN}✅ 钱包生成完成，现在可以启动刷子了${NC}"
+    fi
+}
+
+# 6) 查看钱包列表
+view_wallets() {
+  if [[ -f "$ACCOUNTS_DIR/batch_accounts.txt" ]]; then
+    echo -e "${YELLOW}钱包地址列表:${NC}"
+    cat "$ACCOUNTS_DIR/batch_accounts.txt"
+    count=$(get_wallet_count)
+    echo -e "\n${GREEN}总计: $count 个钱包${NC}"
+  else
+    echo -e "${YELLOW}还没有生成钱包${NC}"
+  fi
+}
+
+# 7) 启动动态代理刷子
 start_dynamic_brush() {
   if ! command -v miden &>/dev/null; then
     echo -e "${RED}错误: Miden 客户端未安装${NC}"
@@ -246,57 +374,42 @@ start_dynamic_brush() {
     return 1
   fi
   
+  if [[ ! -f "$ACCOUNTS_DIR/batch_accounts.txt" ]]; then
+    echo -e "${RED}请先生成钱包地址${NC}"
+    return 1
+  fi
+  
   echo -e "${YELLOW}启动动态代理刷子...${NC}"
   
-  # 读取代理配置
-  proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
-  IFS=':' read -r protocol ip port user pass <<< "$proxy_line"
-  
   # 创建Python刷子脚本
-  cat > $PYTHON_BRUSH <<EOF
+  cat > $PYTHON_BRUSH <<'EOF'
 #!/usr/bin/env python3
 import time
 import random
 import subprocess
 import os
+import glob
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 
-# 代理配置
-PROXY_PROTOCOL = "$protocol"
-PROXY_IP = "$ip"
-PROXY_PORT = "$port"
-PROXY_USER = "$user"
-PROXY_PASS = "$pass"
-
-print(f"使用动态代理: {PROXY_PROTOCOL}://{PROXY_USER}:***@{PROXY_IP}:{PROXY_PORT}")
+print("🚀 动态代理刷子启动！")
 
 # 读取钱包地址
 accounts = []
-if os.path.exists("$ACCOUNTS_DIR/batch_accounts.txt"):
-    with open("$ACCOUNTS_DIR/batch_accounts.txt", "r") as f:
-        accounts = [line.strip() for line in f if line.strip()]
-
-if not accounts:
-    print("没有找到钱包地址，请先生成钱包")
-    exit(1)
+with open("miden_wallets/batch_accounts.txt", "r") as f:
+    accounts = [line.strip() for line in f if line.strip()]
 
 print(f"找到 {len(accounts)} 个钱包地址")
 
 def get_chrome_driver():
-    """创建带代理的Chrome浏览器"""
+    """创建浏览器"""
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    
-    # 设置代理
-    if PROXY_IP != "127.0.0.1":  # 如果不是默认值
-        proxy_url = f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_IP}:{PROXY_PORT}"
-        options.add_argument(f'--proxy-server={proxy_url}')
     
     driver = webdriver.Chrome(options=options)
     return driver
@@ -367,7 +480,7 @@ def send_transaction():
         target_addr = random.choice(accounts)
         
         # 使用proxychains执行命令（通过系统代理）
-        cmd = ["miden", "client", "tx", "send", "--to", target_addr, "--amount", str(amount), "--asset", "POL"]
+        cmd = ["proxychains", "-q", "miden", "client", "tx", "send", "--to", target_addr, "--amount", str(amount), "--asset", "POL"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
@@ -382,7 +495,7 @@ def create_note():
     """创建笔记"""
     try:
         amount = round(random.uniform(0.001, 0.05), 6)
-        cmd = ["miden", "client", "note", "create", "--type", "private", "--asset", f"{amount}:POL"]
+        cmd = ["proxychains", "-q", "miden", "client", "note", "create", "--type", "private", "--asset", f"{amount}:POL"]
         subprocess.run(cmd, capture_output=True, timeout=30)
         print(f"📝 [{time.strftime('%H:%M:%S')}] 创建笔记: {amount} POL")
     except:
@@ -390,7 +503,6 @@ def create_note():
 
 # 主循环
 round_count = 0
-print("🚀 动态代理刷子启动！")
 
 while True:
     round_count += 1
@@ -432,7 +544,7 @@ EOF
   echo -e "${YELLOW}实时日志: tail -f $LOG_FILE${NC}"
 }
 
-# 6) 停止刷子
+# 8) 停止刷子
 stop_brush() {
   if [[ -f $PID_FILE ]]; then
     kill $(cat $PID_FILE) 2>/dev/null
@@ -443,23 +555,13 @@ stop_brush() {
   fi
 }
 
-# 7) 查看日志
+# 9) 查看实时日志
 view_logs() {
   if [[ -f "$LOG_FILE" ]]; then
+    echo -e "${YELLOW}显示实时日志 (Ctrl+C 退出)...${NC}"
     tail -f "$LOG_FILE"
   else
     echo -e "${YELLOW}日志文件不存在${NC}"
-  fi
-}
-
-# 8) 查看钱包
-view_wallets() {
-  if [[ -f "$ACCOUNTS_DIR/batch_accounts.txt" ]]; then
-    echo -e "${YELLOW}钱包地址列表:${NC}"
-    cat "$ACCOUNTS_DIR/batch_accounts.txt"
-    echo -e "\n${GREEN}总计: $(wc -l < "$ACCOUNTS_DIR/batch_accounts.txt") 个钱包${NC}"
-  else
-    echo -e "${YELLOW}还没有生成钱包${NC}"
   fi
 }
 
@@ -471,29 +573,42 @@ menu() {
     echo "1) 一键安装所有依赖"
     echo "2) 配置动态代理"
     echo "3) 测试代理连接"
-    echo "4) 生成钱包地址"
-    echo "5) 查看钱包列表"
-    echo "6) 启动动态代理刷子"
-    echo "7) 停止刷子"
-    echo "8) 查看实时日志"
+    echo "4) 修复 Miden 客户端"
+    echo "5) 生成钱包地址"
+    echo "6) 查看钱包列表"
+    echo "7) 启动动态代理刷子"
+    echo "8) 停止刷子"
+    echo "9) 查看实时日志"
     echo "0) 退出"
     echo "============================"
     
-    # 显示状态信息
-    if [[ -f "dynamic_proxy.conf" ]]; then
-      proxy_info=$(grep -v '^#' dynamic_proxy.conf | head -1)
-      echo -e "${GREEN}✓ 代理已配置: ${proxy_info%%:*}://...${NC}"
+    # 显示状态信息（简洁版）
+    miden_version=$(get_miden_version)
+    proxy_info=$(get_proxy_info)
+    wallet_count=$(get_wallet_count)
+    
+    if [[ "$miden_version" != "未安装" ]]; then
+        echo -e "${GREEN}✓ Miden: $miden_version${NC}"
     else
-      echo -e "${RED}✗ 代理未配置${NC}"
+        echo -e "${RED}✗ Miden: 未安装${NC}"
     fi
     
-    if [[ -f "$ACCOUNTS_DIR/batch_accounts.txt" ]]; then
-      count=$(wc -l < "$ACCOUNTS_DIR/batch_accounts.txt" 2>/dev/null || echo 0)
-      echo -e "${GREEN}✓ 钱包数量: $count${NC}"
+    if [[ "$proxy_info" != "未配置" ]]; then
+        echo -e "${GREEN}✓ 代理: $proxy_info${NC}"
+    else
+        echo -e "${RED}✗ 代理: 未配置${NC}"
+    fi
+    
+    if [[ "$wallet_count" != "0" ]]; then
+        echo -e "${GREEN}✓ 钱包: $wallet_count 个${NC}"
+    else
+        echo -e "${RED}✗ 钱包: 未生成${NC}"
     fi
     
     if [[ -f $PID_FILE ]]; then
-      echo -e "${GREEN}✓ 刷子运行中 (PID: $(cat $PID_FILE))${NC}"
+        echo -e "${GREEN}✓ 刷子: 运行中${NC}"
+    else
+        echo -e "${YELLOW}○ 刷子: 未运行${NC}"
     fi
     
     echo "============================"
@@ -503,11 +618,12 @@ menu() {
       1) install_deps;;
       2) setup_dynamic_proxy;;
       3) test_proxy;;
-      4) gen_wallets;;
-      5) view_wallets;;
-      6) start_dynamic_brush;;
-      7) stop_brush;;
-      8) view_logs;;
+      4) fix_miden_client;;
+      5) gen_wallets;;
+      6) view_wallets;;
+      7) start_dynamic_brush;;
+      8) stop_brush;;
+      9) view_logs;;
       0) echo "再见！"; exit 0;;
       *) echo -e "${RED}输入错误，请重新选择${NC}"; sleep 1;;
     esac
