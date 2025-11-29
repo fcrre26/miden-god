@@ -154,7 +154,7 @@ fi
   
   # 初始化客户端
   echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
-  miden client init --network testnet 2>/dev/null || true
+  miden init --network testnet 2>/dev/null || true
   
   echo -e "${GREEN}所有依赖安装完成！${NC}"
   echo -e "${YELLOW}请运行: source ~/.bashrc${NC}"
@@ -314,7 +314,7 @@ fix_miden_client() {
     
     # 重新初始化客户端
     echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
-    miden client init --network testnet 2>/dev/null || true
+    miden init --network testnet 2>/dev/null || true
     
     # 验证安装
     if command -v miden &>/dev/null; then
@@ -365,9 +365,9 @@ gen_wallets() {
         cd "$WALLET_DIR"
         
         # 创建新钱包（不使用代理）
-        if miden client new-wallet --deploy --testing 2>/dev/null; then
+        if miden new-wallet --deploy --testing 2>/dev/null; then
             # 获取账户地址
-            addr=$(miden client account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
+            addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
             if [[ -n "$addr" ]]; then
                 echo "$addr" >> "../batch_accounts.txt"
                 ((success_count++))
