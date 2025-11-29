@@ -56,68 +56,102 @@ install_deps() {
   echo -e "${GREEN}所有依赖安装完成！${NC}"
 }
 
-# 2) 配置动态代理（直接菜单交互）
+# 2) 配置动态代理（直接录入完整字符串）
 setup_dynamic_proxy() {
-  echo -e "${YELLOW}配置动态代理...${NC}"
+  clear
+  echo -e "${BLUE}=== 动态代理配置 ===${NC}"
+  echo
   
-  # 显示当前配置（如果存在）
+  # 显示当前配置
   if [[ -f "dynamic_proxy.conf" ]]; then
     current_proxy=$(grep -v '^#' dynamic_proxy.conf | head -1)
-    echo -e "${GREEN}当前配置: $current_proxy${NC}"
+    echo -e "${GREEN}当前配置:${NC}"
+    echo "$current_proxy"
+    echo
   fi
   
+  echo -e "${YELLOW}请输入完整的代理信息:${NC}"
   echo
-  echo -e "${BLUE}请输入代理信息:${NC}"
-  echo -e "${YELLOW}格式: 协议:IP:端口:用户名:密码${NC}"
+  echo -e "${GREEN}格式示例:${NC}"
+  echo "http://用户名:密码@IP:端口"
+  echo "或"
+  echo "IP:端口:用户名:密码"
   echo
-  echo -e "${GREEN}示例:${NC}"
-  echo "http:192.168.1.100:8080:myuser:mypass"
-  echo "socks5:proxy.example.com:1080:user123:pass123"
+  echo -e "${BLUE}实际示例:${NC}"
+  echo "ip:端口:用户名:密码"
+  echo "或"
+  echo "http://用户名:密码@ip:端口"
   echo
   
-  read -p "协议 (http/socks5): " protocol
-  read -p "IP地址或域名: " ip
-  read -p "端口: " port
-  read -p "用户名: " username
-  read -p "密码: " password
+  read -p "请输入代理信息: " proxy_input
   
-  # 验证输入
-  if [[ -z "$protocol" || -z "$ip" || -z "$port" || -z "$username" || -z "$password" ]]; then
-    echo -e "${RED}所有字段都必须填写！${NC}"
+  if [[ -z "$proxy_input" ]]; then
+    echo -e "${RED}代理信息不能为空！${NC}"
     return 1
+  fi
+  
+  # 自动识别格式并转换为标准格式
+  if [[ "$proxy_input" == http* ]]; then
+    # 格式: http://user:pass@ip:port
+    proxy_str="$proxy_input"
+  else
+    # 格式: ip:port:user:pass
+    IFS=':' read -r ip port user pass <<< "$proxy_input"
+    proxy_str="http://$user:$pass@$ip:$port"
+  fi
+  
+  # 确认信息
+  echo
+  echo -e "${YELLOW}请确认代理信息:${NC}"
+  echo "$proxy_str"
+  echo
+  
+  read -p "是否保存此配置？(y/N): " confirm
+  if [[ $confirm != "y" && $confirm != "Y" ]]; then
+    echo -e "${YELLOW}已取消配置${NC}"
+    return 0
   fi
   
   # 保存配置
   cat > dynamic_proxy.conf <<EOF
 # 动态代理配置
-# 格式: 协议:IP:端口:用户名:密码
-$protocol:$ip:$port:$username:$password
+$proxy_str
 EOF
   
-  echo -e "${GREEN}代理配置已保存！${NC}"
+  echo -e "${GREEN}✓ 代理配置已保存到 dynamic_proxy.conf${NC}"
   
-  # 立即应用到系统
+  # 应用到系统
   apply_proxy_config
 }
 
-# 应用代理配置到系统
+# 应用到系统（适配新格式）
 apply_proxy_config() {
   if [[ ! -f "dynamic_proxy.conf" ]]; then
-    echo -e "${RED}代理配置文件不存在${NC}"
+    echo -e "${RED}✗ 代理配置文件不存在${NC}"
     return 1
   fi
   
-  # 读取代理配置
   proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
-  if [[ -z "$proxy_line" ]]; then
-    echo -e "${RED}代理配置为空${NC}"
-    return 1
+  
+  # 解析代理字符串
+  if [[ "$proxy_line" == http* ]]; then
+    # 格式: http://user:pass@ip:port
+    protocol="http"
+    # 提取IP、端口、用户名、密码
+    temp="${proxy_line#http://}"
+    user_pass="${temp%@*}"
+    ip_port="${temp#*@}"
+    
+    IFS=':' read -r user pass <<< "$user_pass"
+    IFS=':' read -r ip port <<< "$ip_port"
+  else
+    # 格式: ip:port:user:pass
+    IFS=':' read -r ip port user pass <<< "$proxy_line"
+    protocol="http"
   fi
   
-  IFS=':' read -r protocol ip port user pass <<< "$proxy_line"
-  
-  if [[ -z "$protocol" || -z "$ip" || -z "$port" ]]; then
-    echo -e "${RED}代理配置格式错误${NC}"
+  if [[ -z "$ip" || -z "$port" || -z "$user" || -z "$pass" ]]; then
+    echo -e "${RED}✗ 代理配置格式错误${NC}"
     return 1
   fi
   
@@ -132,12 +166,35 @@ tcp_connect_time_out 8000
 $protocol $ip $port $user $pass
 EOF
 
-  echo -e "${GREEN}代理配置已应用到系统${NC}"
+  echo -e "${GREEN}✓ 代理配置已应用到系统${NC}"
   echo -e "${BLUE}代理信息:${NC}"
   echo "协议: $protocol"
-  echo "地址: $ip:$port" 
+  echo "地址: $ip:$port"
   echo "用户: $user"
   echo -e "${GREEN}配置完成！${NC}"
+}
+
+# 测试代理连接
+test_proxy() {
+  echo -e "${YELLOW}测试代理连接...${NC}"
+  
+  if [[ ! -f "dynamic_proxy.conf" ]]; then
+    echo -e "${RED}请先配置代理${NC}"
+    return 1
+  fi
+  
+  # 读取代理配置
+  proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
+  
+  echo -e "${GREEN}通过代理获取公网IP...${NC}"
+  echo -e "${BLUE}使用代理: ${proxy_line}${NC}"
+  
+  # 测试连接
+  if proxychains curl -s --connect-timeout 10 ipinfo.io/ip; then
+    echo -e "${GREEN}✓ 代理连接成功${NC}"
+  else
+    echo -e "${RED}✗ 代理连接失败${NC}"
+  fi
 }
 
 # 3) 测试代理连接
