@@ -188,30 +188,26 @@ test_proxy() {
   
   echo -e "${GREEN}通过代理获取公网IP...${NC}"
   echo -e "${BLUE}使用代理: ${proxy_line}${NC}"
+  echo -e "${YELLOW}正在连接，请稍候...${NC}"
   echo
   
-  # 设置超时并显示进度
-  (
-    timeout 15 proxychains curl -s ipinfo.io/ip
-    if [ $? -eq 124 ]; then
-      echo -e "${RED}✗ 代理连接超时（15秒）${NC}"
-    fi
-  ) &
+  # 使用更简洁的测试方式
+  local result
+  result=$(timeout 10 proxychains -q curl -s ipinfo.io/ip 2>/dev/null)
   
-  # 显示等待动画
-  local pid=$!
-  local spin='-\|/'
-  local i=0
-  while kill -0 $pid 2>/dev/null; do
-    i=$(( (i+1) %4 ))
-    printf "\r${YELLOW}等待代理响应 ${spin:$i:1}${NC}"
-    sleep 0.1
-  done
-  wait $pid
-  
-  echo -e "\n"
-  echo -e "${GREEN}✓ 代理配置测试完成${NC}"
-  echo -e "${YELLOW}提示：如果显示超时，可能是代理服务器响应慢，但不影响正常使用${NC}"
+  if [[ -n "$result" ]]; then
+    echo -e "${GREEN}✅ 代理连接成功！${NC}"
+    echo -e "${BLUE}当前公网IP: $result${NC}"
+    echo -e "${GREEN}代理工作正常，可以开始使用${NC}"
+  else
+    echo -e "${YELLOW}⚠️  代理连接测试超时${NC}"
+    echo -e "${YELLOW}这可能是因为：${NC}"
+    echo "  • 代理服务器响应较慢"
+    echo "  • 网络延迟较高" 
+    echo "  • 代理需要额外配置"
+    echo
+    echo -e "${GREEN}建议直接尝试启动刷子，实际使用可能正常${NC}"
+  fi
 }
 
 # 4) 生成钱包
