@@ -56,41 +56,47 @@ install_deps() {
   echo -e "${GREEN}所有依赖安装完成！${NC}"
 }
 
-# 2) 配置动态代理
+# 2) 配置动态代理（直接菜单交互）
 setup_dynamic_proxy() {
   echo -e "${YELLOW}配置动态代理...${NC}"
   
-  # 创建代理配置文件
-  cat > dynamic_proxy.conf <<'EOF'
-# 动态代理配置
-# 格式: 协议:IP:端口:用户名:密码
-# 示例: http:127.0.0.1:8080:user:pass
-# 请修改下面的配置为您实际的动态代理信息
-http:127.0.0.1:8080:username:password
-EOF
-
-  echo -e "${GREEN}代理配置文件已创建: dynamic_proxy.conf${NC}"
-  echo -e "${YELLOW}请编辑此文件，填入您的动态代理信息${NC}"
-  echo
-  echo -e "${BLUE}配置格式:${NC}"
-  echo "协议:IP地址:端口:用户名:密码"
-  echo
-  echo -e "${YELLOW}示例:${NC}"
-  echo "http:proxy.example.com:8080:myuser:mypass"
-  echo "socks5:127.0.0.1:1080:user123:pass123"
-  
-  read -p "是否现在编辑代理配置？(y/n) " edit_now
-  if [[ $edit_now == "y" || $edit_now == "Y" ]]; then
-    if command -v nano &>/dev/null; then
-      nano dynamic_proxy.conf
-    elif command -v vim &>/dev/null; then
-      vim dynamic_proxy.conf
-    else
-      vi dynamic_proxy.conf
-    fi
+  # 显示当前配置（如果存在）
+  if [[ -f "dynamic_proxy.conf" ]]; then
+    current_proxy=$(grep -v '^#' dynamic_proxy.conf | head -1)
+    echo -e "${GREEN}当前配置: $current_proxy${NC}"
   fi
   
-  # 应用代理配置
+  echo
+  echo -e "${BLUE}请输入代理信息:${NC}"
+  echo -e "${YELLOW}格式: 协议:IP:端口:用户名:密码${NC}"
+  echo
+  echo -e "${GREEN}示例:${NC}"
+  echo "http:192.168.1.100:8080:myuser:mypass"
+  echo "socks5:proxy.example.com:1080:user123:pass123"
+  echo
+  
+  read -p "协议 (http/socks5): " protocol
+  read -p "IP地址或域名: " ip
+  read -p "端口: " port
+  read -p "用户名: " username
+  read -p "密码: " password
+  
+  # 验证输入
+  if [[ -z "$protocol" || -z "$ip" || -z "$port" || -z "$username" || -z "$password" ]]; then
+    echo -e "${RED}所有字段都必须填写！${NC}"
+    return 1
+  fi
+  
+  # 保存配置
+  cat > dynamic_proxy.conf <<EOF
+# 动态代理配置
+# 格式: 协议:IP:端口:用户名:密码
+$protocol:$ip:$port:$username:$password
+EOF
+  
+  echo -e "${GREEN}代理配置已保存！${NC}"
+  
+  # 立即应用到系统
   apply_proxy_config
 }
 
@@ -116,7 +122,7 @@ apply_proxy_config() {
   fi
   
   # 创建 proxychains 配置
-  cat > /etc/proxychains.conf <<EOF
+  sudo tee /etc/proxychains.conf > /dev/null <<EOF
 strict_chain
 proxy_dns
 tcp_read_time_out 15000
@@ -127,7 +133,11 @@ $protocol $ip $port $user $pass
 EOF
 
   echo -e "${GREEN}代理配置已应用到系统${NC}"
-  echo -e "${BLUE}代理信息:${NC} $protocol://$user:****@$ip:$port"
+  echo -e "${BLUE}代理信息:${NC}"
+  echo "协议: $protocol"
+  echo "地址: $ip:$port" 
+  echo "用户: $user"
+  echo -e "${GREEN}配置完成！${NC}"
 }
 
 # 3) 测试代理连接
