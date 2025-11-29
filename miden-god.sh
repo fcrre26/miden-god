@@ -1,5 +1,5 @@
 #!/bin/bash
-# miden-god-dynamic-proxy.sh —— 动态代理专版 v0.12.2
+# miden-god-dynamic-proxy.sh —— 动态代理专版 最新版
 set -e
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; NC='\033[0m'
@@ -20,7 +20,7 @@ banner() {
   ╚██╗ ██╔╝██║██║  ██║██╔══╝  ██║   ██║    ██║   ██║██║   ██║██║  ██║
    ╚████╔╝ ██║██████╔╝███████╗╚██████╔╝    ╚██████╔╝╚██████╔╝██████╔╝
     ╚═══╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝      ╚═════╝  ╚═════╝ ╚═════╝ 
-                  动态代理专版 v0.12.2 —— 智能IP轮换
+                  动态代理专版 最新版 —— 智能IP轮换
 ${NC}"
 }
 
@@ -66,7 +66,7 @@ get_wallet_count() {
     fi
 }
 
-# 1) 一键安装所有依赖 - 修改版：使用最新版本
+# 1) 一键安装所有依赖 - 最新版本
 install_deps() {
   echo -e "${YELLOW}正在安装所有依赖...${NC}"
   
@@ -367,19 +367,32 @@ gen_wallets() {
     cd "$(pwd)"
     
     # 临时禁用代理（使用自有IP）
-    # 创建新钱包（不使用代理）
-cd "$WALLET_DIR"
-miden init --local --network testnet 2>/dev/null
-if miden new-wallet --deploy 2>/dev/null; then
-    # 获取账户地址
-    addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
-    if [[ -n "$addr" ]]; then
-        echo "$addr" >> "../batch_accounts.txt"
-        ((success_count++))
-        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d - 地址: ${addr:0:12}...${NC}" $((i*100/total)) $i $total $success_count
+    if [[ -f "/etc/proxychains.conf" ]]; then
+        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak
+        echo -e "${YELLOW}已临时禁用代理，使用自有IP生成钱包${NC}"
     fi
-fi
-cd - >/dev/null
+    
+    success_count=0
+    for ((i=1;i<=total;i++)); do
+        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d${NC}" $((i*100/total)) $i $total $success_count
+        
+        WALLET_DIR="$ACCOUNTS_DIR/wallet_$i"
+        mkdir -p "$WALLET_DIR"
+        cd "$WALLET_DIR"
+        
+        # 创建新钱包（使用本地配置，不使用代理）
+        miden init --local --network testnet 2>/dev/null
+        if miden new-wallet --deploy 2>/dev/null; then
+            # 获取账户地址
+            addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
+            if [[ -n "$addr" ]]; then
+                echo "$addr" >> "../batch_accounts.txt"
+                ((success_count++))
+                printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d - 地址: ${addr:0:12}...${NC}" $((i*100/total)) $i $total $success_count
+            fi
+        fi
+        
+        cd - >/dev/null
     done
     
     # 恢复代理配置
@@ -532,7 +545,7 @@ def send_transaction():
         target_addr = random.choice(accounts)
         
         # 使用proxychains执行命令（通过系统代理）
-        cmd = ["proxychains", "-q", "miden", "client", "tx", "send", "--to", target_addr, "--amount", str(amount), "--asset", "POL"]
+        cmd = ["proxychains", "-q", "miden", "send", "--to", target_addr, "--amount", str(amount), "--asset", "POL"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
@@ -547,7 +560,7 @@ def create_note():
     """创建笔记"""
     try:
         amount = round(random.uniform(0.001, 0.05), 6)
-        cmd = ["proxychains", "-q", "miden", "client", "note", "create", "--type", "private", "--asset", f"{amount}:POL"]
+        cmd = ["proxychains", "-q", "miden", "notes", "create", "--type", "private", "--asset", f"{amount}:POL"]
         subprocess.run(cmd, capture_output=True, timeout=30)
         print(f"📝 [{time.strftime('%H:%M:%S')}] 创建笔记: {amount} POL")
     except:
@@ -558,7 +571,7 @@ round_count = 0
 
 while True:
     round_count += 1
-    printf(f"=== 第 {round_count} 轮开始 ===")
+    print(f"=== 第 {round_count} 轮开始 ===")
     
     # 随机打乱账户顺序
     random.shuffle(accounts)
