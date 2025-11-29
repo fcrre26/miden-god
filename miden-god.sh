@@ -66,17 +66,17 @@ get_wallet_count() {
     fi
 }
 
-# 1) 一键安装所有依赖 - 修改版：使用 v0.12.2
+# 1) 一键安装所有依赖 - 修改版：使用最新版本
 install_deps() {
   echo -e "${YELLOW}正在安装所有依赖...${NC}"
   
   # 安装系统构建工具
   if command -v apt &>/dev/null; then
     sudo apt update -qq
-    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains4 libsqlite3-dev
+    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains4 libsqlite3-dev git
   elif command -v yum &>/dev/null; then
     sudo yum groupinstall -y "Development Tools"
-    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng sqlite-devel
+    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng sqlite-devel git
   fi
   
   # 安装 Rust
@@ -92,61 +92,77 @@ install_deps() {
   export PATH="$HOME/.cargo/bin:$PATH"
   echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
   
-  # 安装 Miden v0.12.2 - 使用指定版本
-# 安装 Miden v0.12.2 - 修复版
-if ! command -v miden &>/dev/null; then
-  echo -e "${YELLOW}安装 Miden 客户端 v0.12.2...${NC}"
-  
-  # 创建临时目录
-  TEMP_DIR=$(mktemp -d)
-  cd "$TEMP_DIR"
-  
-  # 下载并解压 v0.12.2 版本
-  wget -O miden-v0.12.2.tar.gz "https://github.com/0xMiden/miden-client/archive/refs/tags/v0.12.2.tar.gz"
-  tar -xzf miden-v0.12.2.tar.gz
-  cd miden-client-0.12.2
-  
-  # 构建项目而不是直接安装
-  echo -e "${YELLOW}构建 Miden 工作区...${NC}"
-  cargo build --release --features testing --locked
-  
-  # 查找并安装可执行文件
-  echo -e "${YELLOW}安装可执行文件...${NC}"
-  if [ -f "target/release/miden" ]; then
-      sudo cp target/release/miden /usr/local/bin/
-      echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
-  elif [ -f "target/release/miden-client" ]; then
-      sudo cp target/release/miden-client /usr/local/bin/miden
-      echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
+  # 安装 Miden 最新版本
+  if ! command -v miden &>/dev/null; then
+    echo -e "${YELLOW}安装 Miden 客户端最新版本...${NC}"
+    
+    # 创建临时目录
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+    
+    # 克隆最新代码
+    echo -e "${YELLOW}克隆 Miden 客户端仓库...${NC}"
+    git clone https://github.com/0xMiden/miden-client.git
+    cd miden-client
+    
+    # 构建项目
+    echo -e "${YELLOW}构建 Miden 工作区...${NC}"
+    cargo build --release --locked
+    
+    # 查找并安装可执行文件
+    echo -e "${YELLOW}安装可执行文件...${NC}"
+    if [ -f "target/release/miden" ]; then
+        sudo cp target/release/miden /usr/local/bin/
+        echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
+    elif [ -f "target/release/miden-client" ]; then
+        sudo cp target/release/miden-client /usr/local/bin/miden
+        echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
+    else
+        # 尝试安装第一个找到的可执行文件
+        first_bin=$(find target/release/ -maxdepth 1 -type f -executable | head -1)
+        if [ -n "$first_bin" ]; then
+            sudo cp "$first_bin" /usr/local/bin/miden
+            echo -e "${GREEN}✅ Miden 客户端安装成功 (使用 $(basename $first_bin))${NC}"
+        else
+            echo -e "${RED}❌ 错误：构建成功但未找到可执行文件${NC}"
+            echo -e "${YELLOW}构建目录内容:${NC}"
+            find target/release/ -maxdepth 2 -type f
+            exit 1
+        fi
+    fi
+    
+    # 清理临时文件
+    cd /
+    rm -rf "$TEMP_DIR"
+    
+    # 下载必要的包文件
+    echo -e "${YELLOW}下载必要的包文件...${NC}"
+    mkdir -p ~/.miden/packages
+    
+    # 尝试下载包文件，如果失败则继续（客户端会在首次运行时自动生成）
+    if wget -q "https://github.com/0xMiden/miden-client/releases/latest/download/basic-wallet.masp" -O ~/.miden/packages/basic-wallet.masp 2>/dev/null; then
+        echo -e "${GREEN}✅ 下载 basic-wallet.masp 成功${NC}"
+    else
+        echo -e "${YELLOW}⚠️ 无法下载 basic-wallet.masp，将在首次运行时自动生成${NC}"
+    fi
+    
+    if wget -q "https://github.com/0xMiden/miden-client/releases/latest/download/basic-account.masp" -O ~/.miden/packages/basic-account.masp 2>/dev/null; then
+        echo -e "${GREEN}✅ 下载 basic-account.masp 成功${NC}"
+    else
+        echo -e "${YELLOW}⚠️ 无法下载 basic-account.masp，将在首次运行时自动生成${NC}"
+    fi
+    
+    # 验证安装
+    if command -v miden &>/dev/null; then
+        echo -e "${GREEN}✅ 验证: miden 命令可用${NC}"
+    else
+        echo -e "${RED}❌ 验证失败: miden 命令不可用${NC}"
+        exit 1
+    fi
+    
   else
-      # 尝试安装第一个找到的可执行文件
-      first_bin=$(find target/release/ -maxdepth 1 -type f -executable | head -1)
-      if [ -n "$first_bin" ]; then
-          sudo cp "$first_bin" /usr/local/bin/miden
-          echo -e "${GREEN}✅ Miden 客户端安装成功 (使用 $(basename $first_bin))${NC}"
-      else
-          echo -e "${RED}❌ 错误：构建成功但未找到可执行文件${NC}"
-          echo -e "${YELLOW}构建目录内容:${NC}"
-          find target/release/ -maxdepth 2 -type f
-          exit 1
-      fi
+    echo -e "${GREEN}Miden 客户端已安装${NC}"
   fi
-  
-  # 清理临时文件
-  cd /
-  rm -rf "$TEMP_DIR"
-  
-  # 验证安装
-  if command -v miden &>/dev/null; then
-      echo -e "${GREEN}✅ 验证: miden 命令可用${NC}"
-  else
-      echo -e "${RED}❌ 验证失败: miden 命令不可用${NC}"
-      exit 1
-  fi
-  
-else
-  echo -e "${GREEN}Miden 客户端已安装${NC}"
-fi
   
   # 安装 Python 依赖
   echo -e "${YELLOW}安装 Python 依赖...${NC}"
@@ -351,31 +367,19 @@ gen_wallets() {
     cd "$(pwd)"
     
     # 临时禁用代理（使用自有IP）
-    if [[ -f "/etc/proxychains.conf" ]]; then
-        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak
-        echo -e "${YELLOW}已临时禁用代理，使用自有IP生成钱包${NC}"
+    # 创建新钱包（不使用代理）
+cd "$WALLET_DIR"
+miden init --local --network testnet 2>/dev/null
+if miden new-wallet --deploy 2>/dev/null; then
+    # 获取账户地址
+    addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
+    if [[ -n "$addr" ]]; then
+        echo "$addr" >> "../batch_accounts.txt"
+        ((success_count++))
+        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d - 地址: ${addr:0:12}...${NC}" $((i*100/total)) $i $total $success_count
     fi
-    
-    success_count=0
-    for ((i=1;i<=total;i++)); do
-        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d${NC}" $((i*100/total)) $i $total $success_count
-        
-        WALLET_DIR="$ACCOUNTS_DIR/wallet_$i"
-        mkdir -p "$WALLET_DIR"
-        cd "$WALLET_DIR"
-        
-        # 创建新钱包（不使用代理）
-        if miden new-wallet --deploy --testing 2>/dev/null; then
-            # 获取账户地址
-            addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
-            if [[ -n "$addr" ]]; then
-                echo "$addr" >> "../batch_accounts.txt"
-                ((success_count++))
-                printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d - 地址: ${addr:0:12}...${NC}" $((i*100/total)) $i $total $success_count
-            fi
-        fi
-        
-        cd - >/dev/null
+fi
+cd - >/dev/null
     done
     
     # 恢复代理配置
