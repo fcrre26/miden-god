@@ -818,6 +818,14 @@ gen_wallets() {
     read -p "生成多少个钱包？(默认10) > " total
     total=${total:-10}
     
+    # 注意：Miden使用Falcon512密钥系统，不支持BIP39助记词
+    # 如果Miden CLI提供了助记词，我们会提取；如果没有，不会生成假的助记词
+    echo -e "${YELLOW}关于助记词：${NC}"
+    echo -e "${BLUE}提示：Miden使用Falcon512密钥系统，不支持标准BIP39助记词${NC}"
+    echo -e "${BLUE}      如果Miden CLI提供了助记词，我们会自动提取并保存${NC}"
+    echo -e "${BLUE}      如果Miden CLI没有提供，不会生成假的助记词（因为无法恢复钱包）${NC}"
+    echo -e "${BLUE}      请使用keystore文件或导出文件来导入钱包${NC}"
+    
     # 询问是否设置导出密码（用于导出钱包文件）- 批量生成时只询问一次
     echo -e "${YELLOW}钱包导出密码设置（将应用于所有 $total 个钱包）：${NC}"
     echo -e "${BLUE}提示：这是导出钱包文件时设置的密码${NC}"
@@ -1274,6 +1282,16 @@ EOF
             fi
         fi
         
+        # 方法4: 如果Miden没有提供助记词，且用户选择了生成助记词，生成一个BIP39助记词
+        # 注意：Miden使用Falcon512密钥系统，不支持BIP39助记词
+        # 我们不会生成假的助记词，因为无法恢复钱包
+        # 如果Miden CLI没有提供助记词，就使用keystore方式
+        if [[ -z "$mnemonic" ]]; then
+            echo -e "${YELLOW}⚠️ Miden钱包未提供助记词（这是正常的，Miden使用Falcon512密钥系统）${NC}"
+            echo -e "${BLUE}  请使用keystore文件或导出文件来导入钱包${NC}"
+            echo -e "${RED}  ⚠️  重要：不要使用随机生成的助记词，因为无法恢复Miden钱包（地址会不同）${NC}"
+        fi
+        
         # 方法3: 尝试从keystore导出密钥信息（如果Miden支持）
         if [[ -z "$mnemonic" ]]; then
             keystore_path="$HOME/.miden/keystore"
@@ -1308,10 +1326,14 @@ EOF
                 echo -e "${YELLOW}⚠️ 警告：无法保存助记词文件，但继续处理...${NC}"
             }
             chmod 600 "$WALLET_DIR/mnemonic_$i.txt" 2>/dev/null || true
-            echo -e "${GREEN}✓ 助记词已保存${NC}"
+            echo -e "${GREEN}✓ 助记词已保存（由Miden CLI提供）${NC}"
+            echo -e "${BLUE}  助记词: $mnemonic${NC}"
+            echo -e "${GREEN}  ✓ 这是Miden CLI提供的助记词，可以用于恢复钱包${NC}"
         else
-            echo "助记词: 未在输出中找到（Miden可能使用keystore存储）" >> "$wallet_info_file" 2>/dev/null || true
-            echo -e "${YELLOW}⚠️ 未找到助记词，将保存keystore路径${NC}"
+            echo "助记词: 未在输出中找到（Miden使用Falcon512密钥系统，不支持BIP39助记词）" >> "$wallet_info_file" 2>/dev/null || true
+            echo -e "${YELLOW}⚠️ 未找到助记词（这是正常的，Miden使用Falcon512密钥系统）${NC}"
+            echo -e "${BLUE}  请使用keystore文件或导出文件来导入钱包${NC}"
+            echo -e "${BLUE}  不要使用随机生成的助记词，因为无法恢复Miden钱包${NC}"
         fi
         
         # 从输出中提取账户ID
@@ -1638,7 +1660,7 @@ PYTHON_EOF
                             echo "  \"configFile\": \"$WALLET_CONFIG_FILE\","
                             echo "  \"walletDir\": \"$WALLET_DIR\","
                             echo "  \"createdAt\": \"$(date -Iseconds 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')\","
-                            echo "  \"note\": \"Miden钱包导出文件（加密）- 这是导出钱包时设置的密码。导入时需要输入导出时设置的密码（Enter the password you set when exporting your wallet）。如果浏览器无法导入，请使用Miden CLI导入方式。\""
+                            echo "  \"note\": \"Miden钱包导出文件（加密）- 这是导出钱包时设置的密码。导入时需要输入导出时设置的密码（Enter the password you set when exporting your wallet）。注意：Miden CLI文档中export/import命令未提及密码支持，如果密码不正确，请尝试：1) 确认密码是否正确 2) 尝试空密码 3) 使用Miden CLI导入方式。\""
                             echo "}"
                         } > "$wallet_json_file" 2>/dev/null || {
                             echo -e "${YELLOW}⚠️ 警告：无法创建加密JSON导出文件${NC}" >&2
@@ -3178,12 +3200,15 @@ test_wallet_password() {
       if [[ $? -eq 0 && -n "$decrypted" ]]; then
         echo -e "${GREEN}✅ 密码正确！openssl解密成功${NC}"
         echo -e "${BLUE}解密后的数据长度: ${#decrypted} 字节${NC}"
+        echo -e "${YELLOW}⚠️  注意：如果密码正确但浏览器仍无法导入，可能是浏览器钱包期望的格式不同${NC}"
       else
         echo -e "${RED}❌ 密码错误或解密失败${NC}"
         echo -e "${YELLOW}提示：${NC}"
         echo "1. 请确认您输入的是导出钱包时设置的密码"
         echo "2. 密码区分大小写"
         echo "3. 如果忘记密码，可能需要重新生成钱包"
+        echo "4. 注意：Miden CLI文档中export/import命令未提及密码支持"
+        echo "5. 如果设置了密码但测试失败，请检查密码是否正确"
       fi
     else
       echo -e "${YELLOW}openssl未安装，无法测试密码${NC}"
@@ -3248,10 +3273,12 @@ PYTHON_EOF
   fi
   
   echo
-  echo -e "${YELLOW}提示：${NC}"
-  echo "1. 如果密码正确但仍无法导入，可能是浏览器钱包期望的格式不同"
-  echo "2. 可以尝试使用Miden CLI导入方式（选项4修复后使用import命令）"
-  echo "3. 如果忘记密码，需要重新生成钱包"
+  echo -e "${YELLOW}重要提示：${NC}"
+  echo "1. Miden CLI文档中export/import命令未提及密码支持"
+  echo "2. 如果密码正确但仍无法导入，可能是浏览器钱包期望的格式不同"
+  echo "3. 可以尝试使用Miden CLI导入方式（选项4修复后使用import命令）"
+  echo "4. 如果忘记密码，需要重新生成钱包"
+  echo "5. 如果生成钱包时没有设置密码，尝试空密码"
 }
 
 # 主菜单
