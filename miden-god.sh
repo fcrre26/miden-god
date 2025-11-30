@@ -15,8 +15,8 @@ banner() {
   clear
   echo -e "${BLUE}
   ███╗   █╗██╗██████╗ ███████╗██╗   ██╗     ██████╗  ██████╗ ██████╗ 
-  ██║   ██║██║██╔══██╗██╔════╝██║   ██║    ██╔════╝ ██╔═══██╗██╔══██╗
-  ██║   ██║██║██║  ██║█████╗  ██║   ██║    ██║  ███╗██║   ██║██║  ██║
+  ██╗   ██║██║██╔══██╗██╔════╝██║   ██║    ██╔════╝ ██╔═══██╗██╔══██╗
+  ██╗   ██║██║██║  ██║█████╗  ██║   ██║    ██║  ███╗██║   ██║██║  ██║
   ╚██╗ ██╔╝██║██║  ██║██╔══╝  ██║   ██║    ██║   ██║██║   ██║██║  ██║
    ╚████╔╝ ██║██████╔╝███████╗╚██████╔╝    ╚██████╔╝╚██████╔╝██████╔╝
     ╚═══╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝      ╚═════╝  ╚═════╝ ╚═════╝ 
@@ -46,10 +46,20 @@ get_proxy_info() {
             temp="${proxy_line#http://}"
             ip_port="${temp#*@}"
             IFS=':' read -r ip port <<< "$ip_port"
-            echo "$ip:$port"
+            # 添加空值检查
+            if [[ -n "$ip" && -n "$port" ]]; then
+                echo "$ip:$port"
+            else
+                echo "配置错误"
+            fi
         else
             IFS=':' read -r ip port user pass <<< "$proxy_line"
-            echo "$ip:$port"
+            # 添加空值检查
+            if [[ -n "$ip" && -n "$port" ]]; then
+                echo "$ip:$port"
+            else
+                echo "配置错误"
+            fi
         fi
     else
         echo "未配置"
@@ -168,9 +178,9 @@ install_deps() {
   echo -e "${YELLOW}安装 Python 依赖...${NC}"
   pip3 install --quiet selenium
   
-  # 初始化客户端
+  # 初始化客户端 - 连接到本地节点
   echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
-  miden init --network testnet 2>/dev/null || true
+  miden init --rpc http://localhost:57291 --network testnet 2>/dev/null || true
   
   echo -e "${GREEN}所有依赖安装完成！${NC}"
   echo -e "${YELLOW}请运行: source ~/.bashrc${NC}"
@@ -328,9 +338,9 @@ fix_miden_client() {
     echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
     source ~/.bashrc
     
-    # 重新初始化客户端
+    # 重新初始化客户端 - 连接到本地节点
     echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
-    miden init --network testnet 2>/dev/null || true
+    miden init --rpc http://localhost:57291 --network testnet 2>/dev/null || true
     
     # 验证安装
     if command -v miden &>/dev/null; then
@@ -366,33 +376,59 @@ gen_wallets() {
     # 确保在正确的目录
     cd "$(pwd)"
     
+    # 预先获取sudo权限，避免中途中断
+    echo -e "${YELLOW}需要sudo权限来临时管理代理配置...${NC}"
+    sudo -v || {
+        echo -e "${RED}获取sudo权限失败，无法继续${NC}"
+        return 1
+    }
+    
     # 临时禁用代理（使用自有IP）
     if [[ -f "/etc/proxychains.conf" ]]; then
-        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak
+        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak 2>/dev/null
         echo -e "${YELLOW}已临时禁用代理，使用自有IP生成钱包${NC}"
     fi
     
     success_count=0
+    failed_count=0
+    
     for ((i=1;i<=total;i++)); do
-        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d${NC}" $((i*100/total)) $i $total $success_count
+        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d 失败: %d${NC}" $((i*100/total)) $i $total $success_count $failed_count
         
         WALLET_DIR="$ACCOUNTS_DIR/wallet_$i"
         mkdir -p "$WALLET_DIR"
-        cd "$WALLET_DIR"
+        cd "$WALLET_DIR" || continue
         
         # 创建新钱包（使用本地配置，不使用代理）
-        miden init --local --network testnet 2>/dev/null
-        if miden new-wallet --deploy 2>/dev/null; then
-            # 获取账户地址
-            addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
-            if [[ -n "$addr" ]]; then
-                echo "$addr" >> "../batch_accounts.txt"
-                ((success_count++))
-                printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d - 地址: ${addr:0:12}...${NC}" $((i*100/total)) $i $total $success_count
+        echo -e "\n${BLUE}生成钱包 $i/$total...${NC}"
+        
+        # 初始化钱包目录 - 连接到本地节点
+        if miden init --rpc http://localhost:57291 --network testnet 2>/dev/null; then
+            # 尝试生成钱包
+            if miden new-wallet --deploy 2>&1 | tee -a "$LOG_FILE"; then
+                # 获取账户地址
+                addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
+                if [[ -n "$addr" ]]; then
+                    echo "$addr" >> "../batch_accounts.txt"
+                    ((success_count++))
+                    echo -e "${GREEN}✅ 钱包 $i 生成成功: ${addr:0:12}...${NC}"
+                else
+                    ((failed_count++))
+                    echo -e "${YELLOW}⚠️ 钱包 $i 生成但无法获取地址${NC}"
+                fi
+            else
+                ((failed_count++))
+                echo -e "${YELLOW}⚠️ 钱包 $i 生成失败${NC}"
             fi
+        else
+            ((failed_count++))
+            echo -e "${YELLOW}⚠️ 钱包 $i 初始化失败${NC}"
         fi
         
-        cd - >/dev/null
+        cd - >/dev/null || break
+        
+        # 添加短暂延迟，避免请求过快
+        sleep 2
     done
     
     # 恢复代理配置
@@ -401,7 +437,7 @@ gen_wallets() {
         echo -e "${GREEN}已恢复代理配置${NC}"
     fi
     
-    echo -e "\n${GREEN}生成完成！成功: $success_count/$total${NC}"
+    echo -e "\n${GREEN}生成完成！成功: $success_count/$total, 失败: $failed_count${NC}"
     
     if [[ $success_count -eq 0 ]]; then
         echo -e "${RED}所有钱包生成都失败了！${NC}"
@@ -409,9 +445,11 @@ gen_wallets() {
         echo "1. Miden 客户端未正确安装"
         echo "2. 网络连接问题" 
         echo "3. 测试网服务暂时不可用"
+        echo "4. 需要重新安装依赖"
         echo -e "${YELLOW}建议先运行选项1或4修复依赖${NC}"
     else
         echo -e "${GREEN}✅ 钱包生成完成，现在可以启动刷子了${NC}"
+        echo -e "${BLUE}钱包文件: $ACCOUNTS_DIR/batch_accounts.txt${NC}"
     fi
 }
 
