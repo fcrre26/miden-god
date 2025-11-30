@@ -373,12 +373,9 @@ gen_wallets() {
     echo -e "${YELLOW}这可能需要几分钟时间...${NC}"
     echo -e "${GREEN}注意：生成钱包使用自有IP，不走代理${NC}"
     
-    # 确保在正确的目录
-    cd "$(pwd)"
-    
     # 预先获取sudo权限，避免中途中断
     echo -e "${YELLOW}需要sudo权限来临时管理代理配置...${NC}"
-    sudo -v || {
+    sudo echo "获取sudo权限成功" || {
         echo -e "${RED}获取sudo权限失败，无法继续${NC}"
         return 1
     }
@@ -391,27 +388,33 @@ gen_wallets() {
     
     success_count=0
     failed_count=0
+    current_dir=$(pwd)
     
     for ((i=1;i<=total;i++)); do
-        printf "\r${GREEN}进度 %d%% (%d/%d) 成功: %d 失败: %d${NC}" $((i*100/total)) $i $total $success_count $failed_count
+        echo -e "\n${BLUE}=== 生成钱包 $i/$total ===${NC}"
         
         WALLET_DIR="$ACCOUNTS_DIR/wallet_$i"
         mkdir -p "$WALLET_DIR"
-        cd "$WALLET_DIR" || continue
+        cd "$WALLET_DIR" || {
+            echo -e "${RED}无法进入目录 $WALLET_DIR${NC}"
+            ((failed_count++))
+            continue
+        }
         
         # 创建新钱包（使用本地配置，不使用代理）
-        echo -e "\n${BLUE}生成钱包 $i/$total...${NC}"
+        echo -e "${YELLOW}初始化钱包目录...${NC}"
         
         # 初始化钱包目录 - 连接到本地节点
-        if miden init --rpc http://localhost:57291 --network testnet 2>/dev/null; then
+        if miden init --rpc http://localhost:57291 --network testnet 2>&1 | tee -a "$LOG_FILE"; then
+            echo -e "${YELLOW}创建钱包...${NC}"
             # 尝试生成钱包
             if miden new-wallet --deploy 2>&1 | tee -a "$LOG_FILE"; then
                 # 获取账户地址
                 addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
                 if [[ -n "$addr" ]]; then
-                    echo "$addr" >> "../batch_accounts.txt"
+                    echo "$addr" >> "$current_dir/$ACCOUNTS_DIR/batch_accounts.txt"
                     ((success_count++))
-                    echo -e "${GREEN}✅ 钱包 $i 生成成功: ${addr:0:12}...${NC}"
+                    echo -e "${GREEN}✅ 钱包 $i 生成成功: ${addr}${NC}"
                 else
                     ((failed_count++))
                     echo -e "${YELLOW}⚠️ 钱包 $i 生成但无法获取地址${NC}"
@@ -425,10 +428,19 @@ gen_wallets() {
             echo -e "${YELLOW}⚠️ 钱包 $i 初始化失败${NC}"
         fi
         
-        cd - >/dev/null || break
+        # 返回原始目录
+        cd "$current_dir" || {
+            echo -e "${RED}无法返回原始目录${NC}"
+            break
+        }
         
-        # 添加短暂延迟，避免请求过快
-        sleep 2
+        # 显示当前进度
+        echo -e "${GREEN}进度: $i/$total, 成功: $success_count, 失败: $failed_count${NC}"
+        
+        # 添加短暂延迟，避免请求过快（除非是最后一个）
+        if [[ $i -lt $total ]]; then
+            sleep 3
+        fi
     done
     
     # 恢复代理配置
