@@ -634,20 +634,21 @@ gen_wallets() {
     echo -e "${YELLOW}开始生成 $total 个钱包...${NC}"
     
     # 检查代理路由配置
-    if [[ -f "$PROXY_ROUTER_CONF" ]]; then
-        echo -e "${BLUE}🔗 通过代理路由生成钱包${NC}"
-        # 测试代理路由是否有效
-        if ! grep -qE "^(http|socks4|socks5)\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
-            echo -e "${RED}❌ 代理路由配置格式错误，使用直连模式${NC}"
-            USE_PROXY=false
-        else
-            USE_PROXY=true
-            echo -e "${GREEN}✅ 代理路由配置有效${NC}"
-        fi
+if [[ -f "$PROXY_ROUTER_CONF" ]]; then
+    echo -e "${BLUE}🔗 通过代理路由生成钱包${NC}"
+    # 更宽松的检查：只要文件存在且非空就尝试使用
+    if [[ -s "$PROXY_ROUTER_CONF" ]]; then
+        USE_PROXY=true
+        echo -e "${GREEN}✅ 代理路由配置存在，尝试使用${NC}"
     else
-        echo -e "${YELLOW}⚠️ 使用直连模式生成钱包${NC}"
+        echo -e "${YELLOW}⚠️ 代理路由配置文件为空，使用直连模式${NC}"
         USE_PROXY=false
     fi
+else
+    echo -e "${YELLOW}⚠️ 使用直连模式生成钱包${NC}"
+    USE_PROXY=false
+fi
+    
     
     success_count=0
     failed_count=0
