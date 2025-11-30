@@ -1,5 +1,5 @@
 #!/bin/bash
-# miden-god-dynamic-proxy.sh —— 动态代理专版 最新版（集成智能路由） - 已更新 CLI 命令
+# miden-god-dynamic-proxy.sh —— 动态代理专版 最新版（集成智能路由） - 已修复版本
 set -e
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; NC='\033[0m'
@@ -94,10 +94,10 @@ check_node_status() {
     fi
 }
 
-# 检查代理路由状态
+# 检查代理路由状态 - 修复版本
 check_proxy_router_status() {
     if [[ -f "$PROXY_ROUTER_CONF" ]]; then
-        if grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
+        if grep -qE "^(http|socks4|socks5)\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
             proxy_ip=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$PROXY_ROUTER_CONF" | head -1 2>/dev/null || echo "未知")
             echo "已配置 ($proxy_ip)"
         else
@@ -179,7 +179,7 @@ EOF
     echo -e "${YELLOW}现在GOD脚本将通过代理运行，节点服务保持直连${NC}"
 }
 
-# 测试代理路由
+# 测试代理路由 - 修复版本
 test_proxy_router() {
     echo -e "${YELLOW}测试代理路由...${NC}"
     
@@ -188,15 +188,15 @@ test_proxy_router() {
         return 1
     fi
     
-    # 检查代理配置格式
-    if ! grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF"; then
+    # 检查代理配置格式（更宽松的检查）
+    if ! grep -qE "^(http|socks4|socks5)\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+" "$PROXY_ROUTER_CONF"; then
         echo -e "${RED}❌ 代理路由配置格式错误${NC}"
         return 1
     fi
     
     echo -e "${GREEN}通过代理路由测试连接...${NC}"
     
-    if timeout 10 proxychains -q -f "$PROXY_ROUTER_CONF" curl -s ipinfo.io/ip >/tmp/proxy_router_test.txt 2>/dev/null; then
+    if timeout 10 proxychains -q -f "$PROXY_ROUTER_CONF" curl -s ifconfig.me >/tmp/proxy_router_test.txt 2>/dev/null; then
         local ip=$(cat /tmp/proxy_router_test.txt)
         echo -e "${GREEN}✅ 代理路由连接成功！${NC}"
         echo -e "${BLUE}当前出口IP: $ip${NC}"
@@ -228,7 +228,7 @@ start_node_direct() {
     
     echo -e "${YELLOW}等待节点启动...${NC}"
     for i in {1..30}; do
-        if grpcurl -plaintext -d '{}' localhost:57291 rpc.Api/Status >/dev/null 2>&1; then
+        if curl -s http://localhost:57291 >/dev/null 2>&1; then
             echo -e "${GREEN}✅ 节点启动成功 (PID: $node_pid)${NC}"
             echo -e "${BLUE}节点运行模式: 直连${NC}"
             return 0
@@ -253,7 +253,7 @@ show_router_status() {
     fi
     
     if [[ -f "$PROXY_ROUTER_CONF" ]]; then
-        if grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF"; then
+        if grep -qE "^(http|socks4|socks5)\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+" "$PROXY_ROUTER_CONF"; then
             echo -e "${GREEN}✅ GOD脚本将通过代理IP运行${NC}"
         else
             echo -e "${RED}❌ 代理路由配置错误${NC}"
@@ -263,17 +263,29 @@ show_router_status() {
 
 # ========== 更新后的 CLI 命令功能 ==========
 
-# 1) 一键安装所有依赖
+# 1) 一键安装所有依赖 - 修复版本
 install_deps() {
   echo -e "${YELLOW}正在安装所有依赖...${NC}"
   
   # 安装系统构建工具
   if command -v apt &>/dev/null; then
     sudo apt update -qq
-    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains4 libsqlite3-dev git grpcurl
+    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains4 libsqlite3-dev git
+    # 检查并安装 grpcurl（如果可用）
+    if apt-cache show grpcurl &>/dev/null; then
+        sudo apt install -y grpcurl
+    else
+        echo -e "${YELLOW}⚠️ grpcurl 不可用，跳过安装${NC}"
+    fi
   elif command -v yum &>/dev/null; then
     sudo yum groupinstall -y "Development Tools"
-    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng sqlite-devel git grpcurl
+    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng sqlite-devel git
+    # 检查并安装 grpcurl（如果可用）
+    if yum list available grpcurl &>/dev/null; then
+        sudo yum install -y grpcurl
+    else
+        echo -e "${YELLOW}⚠️ grpcurl 不可用，跳过安装${NC}"
+    fi
   fi
   
   # 安装 Rust
@@ -508,7 +520,7 @@ test_proxy() {
   echo -e "${GREEN}正在测试代理连接（最多10秒）...${NC}"
   
   # 直接测试，完全静默
-  if timeout 10 proxychains -q curl -s ipinfo.io/ip >/tmp/proxy_test_ip.txt 2>/dev/null; then
+  if timeout 10 proxychains -q curl -s ifconfig.me >/tmp/proxy_test_ip.txt 2>/dev/null; then
     local ip=$(cat /tmp/proxy_test_ip.txt)
     echo -e "${GREEN}✅ 代理连接成功！${NC}"
     echo -e "${BLUE}当前公网IP: $ip${NC}"
@@ -572,7 +584,7 @@ gen_wallets() {
     if [[ -f "$PROXY_ROUTER_CONF" ]]; then
         echo -e "${BLUE}🔗 通过代理路由生成钱包${NC}"
         # 测试代理路由是否有效
-        if ! grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
+        if ! grep -qE "^(http|socks4|socks5)\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
             echo -e "${RED}❌ 代理路由配置格式错误，使用直连模式${NC}"
             USE_PROXY=false
         else
