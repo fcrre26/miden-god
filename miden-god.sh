@@ -586,16 +586,24 @@ test_proxy() {
   echo
 }
 
-# 4) 修复 Miden 客户端配置
+# 4) 修复 Miden 客户端配置 - 增强版本
 fix_miden_client() {
     echo -e "${YELLOW}修复 Miden 客户端配置...${NC}"
+    
+    # 清理损坏的文件
+    echo -e "${YELLOW}清理损坏的配置文件...${NC}"
+    rm -rf ~/.miden 2>/dev/null || true
+    rm -rf miden_wallets 2>/dev/null || true
+    mkdir -p ~/.miden/packages
+    mkdir -p miden_wallets
+    mkdir -p miden_logs
     
     # 设置环境变量
     export PATH="$HOME/.cargo/bin:$PATH"
     echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
     source ~/.bashrc
     
-    # 重新初始化客户端 - 连接到本地节点
+    # 重新初始化客户端
     echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
     miden-client init --network http://localhost:57291 2>/dev/null || true
     
