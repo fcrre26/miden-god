@@ -119,42 +119,83 @@ setup_proxy_router() {
     echo "✅ GOD脚本 -> 代理模式（动态IP）"
     echo
     
+    # 检查代理配置文件是否存在
     if [[ ! -f "dynamic_proxy.conf" ]]; then
         echo -e "${RED}请先配置代理信息（选项2）${NC}"
+        echo -e "${YELLOW}按回车返回菜单...${NC}"
+        read
         return 1
     fi
     
-    # 获取代理配置
-    proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
+    # 读取代理配置
+    proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1 | tr -d '[:space:]')
     
-    # 解析代理字符串
+    if [[ -z "$proxy_line" ]]; then
+        echo -e "${RED}代理配置文件为空或格式错误${NC}"
+        echo -e "${YELLOW}按回车返回菜单...${NC}"
+        read
+        return 1
+    fi
+    
+    echo -e "${GREEN}找到代理配置:${NC}"
+    echo "$proxy_line"
+    echo
+    
+    # 解析代理配置
+    local ip port user pass protocol
+    
     if [[ "$proxy_line" == http* ]]; then
-        temp="${proxy_line#http://}"
-        user_pass="${temp%@*}"
-        ip_port="${temp#*@}"
-        IFS=':' read -r user pass <<< "$user_pass"
-        IFS=':' read -r ip port <<< "$ip_port"
+        # 格式: http://user:pass@ip:port
         protocol="http"
+        temp="${proxy_line#http://}"
+        if [[ "$temp" == *"@"* ]]; then
+            user_pass="${temp%@*}"
+            ip_port="${temp#*@}"
+            IFS=':' read -r user pass <<< "$user_pass"
+            IFS=':' read -r ip port <<< "$ip_port"
+        else
+            # 格式: http://ip:port
+            IFS=':' read -r ip port <<< "$temp"
+            user=""
+            pass=""
+        fi
     else
+        # 格式: ip:port:user:pass 或 ip:port
         IFS=':' read -r ip port user pass <<< "$proxy_line"
         protocol="http"
     fi
     
-    if [[ -z "$ip" || -z "$port" || -z "$user" || -z "$pass" ]]; then
-        echo -e "${RED}✗ 代理配置格式错误${NC}"
+    # 验证必要参数
+    if [[ -z "$ip" || -z "$port" ]]; then
+        echo -e "${RED}✗ 代理配置缺少IP或端口信息${NC}"
+        echo -e "${YELLOW}配置格式应为: IP:端口:用户名:密码 或 http://用户名:密码@IP:端口${NC}"
+        echo -e "${YELLOW}按回车返回菜单...${NC}"
+        read
         return 1
     fi
     
-    # 验证IP格式
-    if ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo -e "${RED}✗ IP地址格式错误: $ip${NC}"
-        return 1
-    fi
+    # 如果用户密码为空，使用占位符
+    user="${user:-user}"
+    pass="${pass:-pass}"
     
-    # 验证端口格式
-    if ! [[ "$port" =~ ^[0-9]+$ ]]; then
-        echo -e "${RED}✗ 端口格式错误: $port${NC}"
-        return 1
+    echo -e "${YELLOW}解析出的代理信息:${NC}"
+    echo "协议: $protocol"
+    echo "地址: $ip:$port"
+    echo "用户: $user"
+    echo "密码: [已隐藏]"
+    echo
+    
+    # 确认配置
+    echo -e "${YELLOW}是否创建智能代理路由配置？${NC}"
+    echo -e "这将允许GOD脚本通过代理运行，同时节点服务保持直连。"
+    echo -n "确认 (y/N): "
+    read confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo -e "${YELLOW}已取消配置${NC}"
+        echo -e "${YELLOW}按回车返回菜单...${NC}"
+        read
+        return 0
     fi
     
     # 创建代理路由配置
@@ -170,13 +211,25 @@ localnet 127.0.0.0/255.0.0.0
 $protocol $ip $port $user $pass
 EOF
 
-    echo -e "${GREEN}✅ 智能代理路由配置完成！${NC}"
-    echo
-    echo -e "${BLUE}路由配置：${NC}"
-    echo "🔗 节点服务: 直连模式 (保持P2P稳定)"
-    echo "🔄 GOD脚本: 代理模式 ($ip:$port)"
-    echo
-    echo -e "${YELLOW}现在GOD脚本将通过代理运行，节点服务保持直连${NC}"
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}✅ 智能代理路由配置完成！${NC}"
+        echo
+        echo -e "${BLUE}路由配置详情:${NC}"
+        echo "🔗 节点服务: 直连模式 (保持P2P稳定)"
+        echo "🔄 GOD脚本: 代理模式 ($ip:$port)"
+        echo "📁 配置文件: $PROXY_ROUTER_CONF"
+        echo
+        echo -e "${YELLOW}现在GOD脚本将通过代理运行，节点服务保持直连${NC}"
+    else
+        echo -e "${RED}❌ 配置创建失败${NC}"
+        echo -e "${YELLOW}按回车返回菜单...${NC}"
+        read
+        return 1
+    fi
+    
+    echo -e "${YELLOW}按回车返回菜单...${NC}"
+    read
+    return 0
 }
 
 # 测试代理路由 - 修复版本
