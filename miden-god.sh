@@ -1,5 +1,5 @@
 #!/bin/bash
-# miden-god-dynamic-proxy.sh —— 动态代理专版 最新版（集成智能路由）
+# miden-god-dynamic-proxy.sh —— 动态代理专版 最新版（集成智能路由） - 已更新 CLI 命令
 set -e
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; NC='\033[0m'
@@ -18,24 +18,31 @@ chmod 644 "$LOG_FILE" 2>/dev/null || true
 banner() {
   clear
   echo -e "${BLUE}
-  ███╗   █╗██╗██████╗ ███████╗██╗   ██╗     ██████╗  ██████╗ ██████╗ 
-  ██╗   ██║██║██╔══██╗██╔════╝██╗   ██║    ██╔════╝ ██╔═══██╗██╔══██╗
-  ██╗   ██║██║██║  ██║█████╗  ██║   ██║    ██║  ███╗██║   ██║██║  ██║
-  ╚██╗ ██╔╝██║██║  ██║██╔══╝  ██║   ██║    ██║   ██║██║   ██║██║  ██║
-   ╚████╔╝ ██║██████╔╝███████╗╚██████╔╝    ╚██████╔╝╚██████╔╝██████╔╝
-    ╚═══╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝      ╚═════╝  ╚═════╝ ╚═════╝ 
-          动态代理专版 最新版 —— 集成智能路由
+  ███╗   █╗██╗██████╗ ███████╗███╗   ██╗     ██████╗  ██████╗ ██████╗ 
+  ████╗  ██║██║██╔══██╗██╔════╝████╗  ██║    ██╔════╝ ██╔═══██╗██╔══██╗
+  ██╔██╗ ██║██║██║  ██║█████╗  ██╔██╗ ██║    ██║  ███╗██║   ██║██║  ██║
+  ██║╚██╗██║██║██║  ██║██╔══╝  ██║╚██╗██║    ██║   ██║██║   ██║██║  ██║
+  ██║ ╚████║██║██████╔╝███████╗██║ ╚████║    ╚██████╔╝╚██████╔╝██████╔╝
+  ╚═╝  ╚═══╝╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝     ╚═════╝  ╚═════╝ ╚═════╝ 
+          动态代理专版 最新版 —— 集成智能路由 (CLI 0.13)
 ${NC}"
 }
 
 # 获取简洁的 Miden 版本信息
 get_miden_version() {
-    if command -v miden &>/dev/null; then
-        version=$(miden --version 2>/dev/null | grep -o 'miden [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 | sed 's/miden //')
+    if command -v miden-client &>/dev/null; then
+        version=$(miden-client --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
         if [[ -n "$version" ]]; then
             echo "$version"
         else
             echo "已安装"
+        fi
+    elif command -v miden &>/dev/null; then
+        version=$(miden --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+        if [[ -n "$version" ]]; then
+            echo "$version (旧版)"
+        else
+            echo "已安装 (旧版)"
         fi
     else
         echo "未安装"
@@ -254,7 +261,7 @@ show_router_status() {
     fi
 }
 
-# ========== 原有功能保持不变 ==========
+# ========== 更新后的 CLI 命令功能 ==========
 
 # 1) 一键安装所有依赖
 install_deps() {
@@ -283,7 +290,7 @@ install_deps() {
   echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
   
   # 安装 Miden 最新版本
-  if ! command -v miden &>/dev/null; then
+  if ! command -v miden-client &>/dev/null; then
     echo -e "${YELLOW}安装 Miden 客户端最新版本...${NC}"
     
     # 创建临时目录
@@ -299,19 +306,22 @@ install_deps() {
     echo -e "${YELLOW}构建 Miden 工作区...${NC}"
     cargo build --release --locked
     
-    # 查找并安装可执行文件
-    echo -e "${YELLOW}安装可执行文件...${NC}"
-    if [ -f "target/release/miden" ]; then
-        sudo cp target/release/miden /usr/local/bin/
+    # 优先安装 miden-client，如果不存在则创建符号链接
+    if [ -f "target/release/miden-client" ]; then
+        sudo cp target/release/miden-client /usr/local/bin/miden-client
+        # 创建 miden 的符号链接以保持兼容性
+        sudo ln -sf /usr/local/bin/miden-client /usr/local/bin/miden
         echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
-    elif [ -f "target/release/miden-client" ]; then
-        sudo cp target/release/miden-client /usr/local/bin/miden
+    elif [ -f "target/release/miden" ]; then
+        sudo cp target/release/miden /usr/local/bin/miden-client
+        sudo ln -sf /usr/local/bin/miden-client /usr/local/bin/miden
         echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
     else
         # 尝试安装第一个找到的可执行文件
         first_bin=$(find target/release/ -maxdepth 1 -type f -executable | head -1)
         if [ -n "$first_bin" ]; then
-            sudo cp "$first_bin" /usr/local/bin/miden
+            sudo cp "$first_bin" /usr/local/bin/miden-client
+            sudo ln -sf /usr/local/bin/miden-client /usr/local/bin/miden
             echo -e "${GREEN}✅ Miden 客户端安装成功 (使用 $(basename $first_bin))${NC}"
         else
             echo -e "${RED}❌ 错误：构建成功但未找到可执行文件${NC}"
@@ -343,10 +353,10 @@ install_deps() {
     fi
     
     # 验证安装
-    if command -v miden &>/dev/null; then
-        echo -e "${GREEN}✅ 验证: miden 命令可用${NC}"
+    if command -v miden-client &>/dev/null; then
+        echo -e "${GREEN}✅ 验证: miden-client 命令可用${NC}"
     else
-        echo -e "${RED}❌ 验证失败: miden 命令不可用${NC}"
+        echo -e "${RED}❌ 验证失败: miden-client 命令不可用${NC}"
         exit 1
     fi
     
@@ -360,7 +370,7 @@ install_deps() {
   
   # 初始化客户端 - 连接到本地节点
   echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
-  miden init --rpc http://localhost:57291 --network testnet 2>/dev/null || true
+  miden-client init --network http://localhost:57291 2>/dev/null || true
   
   echo -e "${GREEN}所有依赖安装完成！${NC}"
   echo -e "${YELLOW}请运行: source ~/.bashrc${NC}"
@@ -522,10 +532,10 @@ fix_miden_client() {
     
     # 重新初始化客户端 - 连接到本地节点
     echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
-    miden init --rpc http://localhost:57291 --network testnet 2>/dev/null || true
+    miden-client init --network http://localhost:57291 2>/dev/null || true
     
     # 验证安装
-    if command -v miden &>/dev/null; then
+    if command -v miden-client &>/dev/null; then
         echo -e "${GREEN}✅ Miden 客户端已正确配置${NC}"
         version=$(get_miden_version)
         echo -e "${BLUE}客户端版本: $version${NC}"
@@ -542,7 +552,7 @@ gen_wallets() {
     
     export PATH="$HOME/.cargo/bin:$PATH"
     
-    if ! command -v miden &>/dev/null; then
+    if ! command -v miden-client &>/dev/null; then
         echo -e "${RED}错误: Miden 客户端未安装，请先运行选项1安装依赖${NC}"
         return 1
     fi
@@ -595,28 +605,28 @@ gen_wallets() {
         # 使用代理路由初始化（如果配置了且有效）
         if [[ "$USE_PROXY" == "true" ]]; then
             echo -e "${YELLOW}通过代理路由初始化...${NC}"
-            if ! proxychains -q -f "$PROXY_ROUTER_CONF" miden init --rpc http://localhost:57291 --network testnet > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2); then
+            if ! proxychains -q -f "$PROXY_ROUTER_CONF" miden-client init --network http://localhost:57291 > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2); then
                 echo -e "${YELLOW}代理路由失败，尝试直连...${NC}"
-                miden init --rpc http://localhost:57291 --network testnet > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
+                miden-client init --network http://localhost:57291 > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
             fi
         else
             echo -e "${YELLOW}直连初始化...${NC}"
-            miden init --rpc http://localhost:57291 --network testnet > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
+            miden-client init --network http://localhost:57291 > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
         fi
         
         # 生成钱包
         echo -e "${YELLOW}创建钱包...${NC}"
         if [[ "$USE_PROXY" == "true" ]]; then
-            if ! proxychains -q -f "$PROXY_ROUTER_CONF" miden new-wallet --deploy > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2); then
+            if ! proxychains -q -f "$PROXY_ROUTER_CONF" miden-client new-wallet --storage-mode public > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2); then
                 echo -e "${YELLOW}代理创建失败，尝试直连创建...${NC}"
-                miden new-wallet --deploy > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
+                miden-client new-wallet --storage-mode public > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
             fi
         else
-            miden new-wallet --deploy > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
+            miden-client new-wallet --storage-mode public > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
         fi
         
         # 获取地址
-        addr=$(miden account 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
+        addr=$(miden-client account --list 2>/dev/null | grep -oE "0x[0-9a-f]+" | head -1)
         if [[ -n "$addr" ]]; then
             echo "$addr" >> "$current_dir/$ACCOUNTS_DIR/batch_accounts.txt"
             ((success_count++))
@@ -659,7 +669,7 @@ view_wallets() {
 
 # 7) 启动动态代理刷子（使用代理路由）
 start_dynamic_brush() {
-  if ! command -v miden &>/dev/null; then
+  if ! command -v miden-client &>/dev/null; then
     echo -e "${RED}错误: Miden 客户端未安装${NC}"
     return 1
   fi
@@ -768,8 +778,8 @@ def send_transaction():
         amount = round(random.uniform(0.001, 0.1), 6)
         target_addr = random.choice(accounts)
         
-        # 使用代理路由配置
-        cmd = ["proxychains", "-q", "-f", "/tmp/proxychains-god.conf", "miden", "send", "--to", target_addr, "--amount", str(amount), "--asset", "POL"]
+        # 使用代理路由配置和新 CLI 命令
+        cmd = ["proxychains", "-q", "-f", "/tmp/proxychains-god.conf", "miden-client", "send", "--target", target_addr, "--asset", f"{amount}::<FAUCET_ID>", "--note-type", "Public"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
@@ -784,7 +794,8 @@ def create_note():
     """创建笔记"""
     try:
         amount = round(random.uniform(0.001, 0.05), 6)
-        cmd = ["proxychains", "-q", "-f", "/tmp/proxychains-god.conf", "miden", "notes", "create", "--type", "private", "--asset", f"{amount}:POL"]
+        # 使用新 CLI 命令创建笔记
+        cmd = ["proxychains", "-q", "-f", "/tmp/proxychains-god.conf", "miden-client", "mint", "--target", "<ACCOUNT_ID>", "--asset", f"{amount}::<FAUCET_ID>", "--note-type", "Private"]
         subprocess.run(cmd, capture_output=True, timeout=30)
         print(f"📝 [{time.strftime('%H:%M:%S')}] 创建笔记: {amount} POL")
     except:
