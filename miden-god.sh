@@ -11,12 +11,15 @@ PYTHON_BRUSH="miden_brush.py"
 PROXY_ROUTER_CONF="/tmp/proxychains-god.conf"
 
 mkdir -p "$ACCOUNTS_DIR" "$LOG_DIR"
+chmod 755 "$ACCOUNTS_DIR" "$LOG_DIR"
+touch "$LOG_FILE" 2>/dev/null || true
+chmod 644 "$LOG_FILE" 2>/dev/null || true
 
 banner() {
   clear
   echo -e "${BLUE}
   ███╗   █╗██╗██████╗ ███████╗██╗   ██╗     ██████╗  ██████╗ ██████╗ 
-  ██╗   ██║██║██╔══██╗██╔════╝██║   ██║    ██╔════╝ ██╔═══██╗██╔══██╗
+  ██╗   ██║██║██╔══██╗██╔════╝██╗   ██║    ██╔════╝ ██╔═══██╗██╔══██╗
   ██╗   ██║██║██║  ██║█████╗  ██║   ██║    ██║  ███╗██║   ██║██║  ██║
   ╚██╗ ██╔╝██║██║  ██║██╔══╝  ██║   ██║    ██║   ██║██║   ██║██║  ██║
    ╚████╔╝ ██║██████╔╝███████╗╚██████╔╝    ╚██████╔╝╚██████╔╝██████╔╝
@@ -87,8 +90,12 @@ check_node_status() {
 # 检查代理路由状态
 check_proxy_router_status() {
     if [[ -f "$PROXY_ROUTER_CONF" ]]; then
-        proxy_ip=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$PROXY_ROUTER_CONF" | head -1 2>/dev/null || echo "未知")
-        echo "已配置 ($proxy_ip)"
+        if grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
+            proxy_ip=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$PROXY_ROUTER_CONF" | head -1 2>/dev/null || echo "未知")
+            echo "已配置 ($proxy_ip)"
+        else
+            echo "配置错误"
+        fi
     else
         echo "未配置"
     fi
@@ -131,12 +138,26 @@ setup_proxy_router() {
         return 1
     fi
     
+    # 验证IP格式
+    if ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo -e "${RED}✗ IP地址格式错误: $ip${NC}"
+        return 1
+    fi
+    
+    # 验证端口格式
+    if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}✗ 端口格式错误: $port${NC}"
+        return 1
+    fi
+    
     # 创建代理路由配置
     cat > "$PROXY_ROUTER_CONF" <<EOF
 strict_chain
 proxy_dns
+remote_dns_subnet 224
 tcp_read_time_out 15000
 tcp_connect_time_out 8000
+localnet 127.0.0.0/255.0.0.0
 
 [ProxyList]
 $protocol $ip $port $user $pass
@@ -160,6 +181,12 @@ test_proxy_router() {
         return 1
     fi
     
+    # 检查代理配置格式
+    if ! grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF"; then
+        echo -e "${RED}❌ 代理路由配置格式错误${NC}"
+        return 1
+    fi
+    
     echo -e "${GREEN}通过代理路由测试连接...${NC}"
     
     if timeout 10 proxychains -q -f "$PROXY_ROUTER_CONF" curl -s ipinfo.io/ip >/tmp/proxy_router_test.txt 2>/dev/null; then
@@ -179,12 +206,12 @@ start_node_direct() {
     echo -e "${YELLOW}启动节点服务（直连模式）...${NC}"
     
     # 停止现有节点
-    pkill -f "miden-node" 2>/dev/null
+    pkill -f "miden-node" 2>/dev/null || true
     sleep 2
     
     # 确保节点使用直连模式
     if [[ -f "/etc/proxychains.conf" ]]; then
-        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak.node 2>/dev/null
+        sudo mv /etc/proxychains.conf /etc/proxychains.conf.bak.node 2>/dev/null || true
         echo -e "${YELLOW}已确保节点使用直连模式${NC}"
     fi
     
@@ -219,7 +246,11 @@ show_router_status() {
     fi
     
     if [[ -f "$PROXY_ROUTER_CONF" ]]; then
-        echo -e "${GREEN}✅ GOD脚本将通过代理IP运行${NC}"
+        if grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF"; then
+            echo -e "${GREEN}✅ GOD脚本将通过代理IP运行${NC}"
+        else
+            echo -e "${RED}❌ 代理路由配置错误${NC}"
+        fi
     fi
 }
 
@@ -227,24 +258,282 @@ show_router_status() {
 
 # 1) 一键安装所有依赖
 install_deps() {
-  # ... 保持原有代码不变 ...
+  echo -e "${YELLOW}正在安装所有依赖...${NC}"
+  
+  # 安装系统构建工具
+  if command -v apt &>/dev/null; then
+    sudo apt update -qq
+    sudo apt install -y build-essential pkg-config libssl-dev curl wget python3-pip unzip proxychains4 libsqlite3-dev git grpcurl
+  elif command -v yum &>/dev/null; then
+    sudo yum groupinstall -y "Development Tools"
+    sudo yum install -y pkgconfig openssl-devel curl wget python3-pip unzip proxychains-ng sqlite-devel git grpcurl
+  fi
+  
+  # 安装 Rust
+  if ! command -v rustc &>/dev/null; then
+    echo -e "${YELLOW}安装 Rust...${NC}"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+  else
+    echo -e "${GREEN}Rust 已安装${NC}"
+  fi
+  
+  # 设置环境变量
+  export PATH="$HOME/.cargo/bin:$PATH"
+  echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
+  
+  # 安装 Miden 最新版本
+  if ! command -v miden &>/dev/null; then
+    echo -e "${YELLOW}安装 Miden 客户端最新版本...${NC}"
+    
+    # 创建临时目录
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+    
+    # 克隆最新代码
+    echo -e "${YELLOW}克隆 Miden 客户端仓库...${NC}"
+    git clone https://github.com/0xMiden/miden-client.git
+    cd miden-client
+    
+    # 构建项目
+    echo -e "${YELLOW}构建 Miden 工作区...${NC}"
+    cargo build --release --locked
+    
+    # 查找并安装可执行文件
+    echo -e "${YELLOW}安装可执行文件...${NC}"
+    if [ -f "target/release/miden" ]; then
+        sudo cp target/release/miden /usr/local/bin/
+        echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
+    elif [ -f "target/release/miden-client" ]; then
+        sudo cp target/release/miden-client /usr/local/bin/miden
+        echo -e "${GREEN}✅ Miden 客户端安装成功${NC}"
+    else
+        # 尝试安装第一个找到的可执行文件
+        first_bin=$(find target/release/ -maxdepth 1 -type f -executable | head -1)
+        if [ -n "$first_bin" ]; then
+            sudo cp "$first_bin" /usr/local/bin/miden
+            echo -e "${GREEN}✅ Miden 客户端安装成功 (使用 $(basename $first_bin))${NC}"
+        else
+            echo -e "${RED}❌ 错误：构建成功但未找到可执行文件${NC}"
+            echo -e "${YELLOW}构建目录内容:${NC}"
+            find target/release/ -maxdepth 2 -type f
+            exit 1
+        fi
+    fi
+    
+    # 清理临时文件
+    cd /
+    rm -rf "$TEMP_DIR"
+    
+    # 下载必要的包文件
+    echo -e "${YELLOW}下载必要的包文件...${NC}"
+    mkdir -p ~/.miden/packages
+    
+    # 尝试下载包文件，如果失败则继续（客户端会在首次运行时自动生成）
+    if wget -q "https://github.com/0xMiden/miden-client/releases/latest/download/basic-wallet.masp" -O ~/.miden/packages/basic-wallet.masp 2>/dev/null; then
+        echo -e "${GREEN}✅ 下载 basic-wallet.masp 成功${NC}"
+    else
+        echo -e "${YELLOW}⚠️ 无法下载 basic-wallet.masp，将在首次运行时自动生成${NC}"
+    fi
+    
+    if wget -q "https://github.com/0xMiden/miden-client/releases/latest/download/basic-account.masp" -O ~/.miden/packages/basic-account.masp 2>/dev/null; then
+        echo -e "${GREEN}✅ 下载 basic-account.masp 成功${NC}"
+    else
+        echo -e "${YELLOW}⚠️ 无法下载 basic-account.masp，将在首次运行时自动生成${NC}"
+    fi
+    
+    # 验证安装
+    if command -v miden &>/dev/null; then
+        echo -e "${GREEN}✅ 验证: miden 命令可用${NC}"
+    else
+        echo -e "${RED}❌ 验证失败: miden 命令不可用${NC}"
+        exit 1
+    fi
+    
+  else
+    echo -e "${GREEN}Miden 客户端已安装${NC}"
+  fi
+  
+  # 安装 Python 依赖
+  echo -e "${YELLOW}安装 Python 依赖...${NC}"
+  pip3 install --quiet selenium
+  
+  # 初始化客户端 - 连接到本地节点
+  echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
+  miden init --rpc http://localhost:57291 --network testnet 2>/dev/null || true
+  
+  echo -e "${GREEN}所有依赖安装完成！${NC}"
+  echo -e "${YELLOW}请运行: source ~/.bashrc${NC}"
 }
 
 # 2) 配置动态代理
 setup_dynamic_proxy() {
-  # ... 保持原有代码不变 ...
+  clear
+  echo -e "${BLUE}=== 动态代理配置 ===${NC}"
+  echo
+  
+  # 显示当前配置
+  if [[ -f "dynamic_proxy.conf" ]]; then
+    current_proxy=$(grep -v '^#' dynamic_proxy.conf | head -1)
+    echo -e "${GREEN}当前配置:${NC}"
+    echo "$current_proxy"
+    echo
+  fi
+  
+  echo -e "${YELLOW}请输入完整的代理信息:${NC}"
+  echo
+  echo -e "${GREEN}格式示例:${NC}"
+  echo "http://用户名:密码@IP:端口"
+  echo "或"
+  echo "IP:端口:用户名:密码"
+  echo
+  echo -e "${BLUE}实际示例:${NC}"
+  echo "74.81.81.81:823:username:password"
+  echo "或"
+  echo "http://username:password@74.81.81.81:823"
+  echo
+  
+  read -p "请输入代理信息: " proxy_input
+  
+  if [[ -z "$proxy_input" ]]; then
+    echo -e "${RED}代理信息不能为空！${NC}"
+    return 1
+  fi
+  
+  # 自动识别格式并转换为标准格式
+  if [[ "$proxy_input" == http* ]]; then
+    # 格式: http://user:pass@ip:port
+    proxy_str="$proxy_input"
+  else
+    # 格式: ip:port:user:pass
+    IFS=':' read -r ip port user pass <<< "$proxy_input"
+    proxy_str="http://$user:$pass@$ip:$port"
+  fi
+  
+  # 确认信息
+  echo
+  echo -e "${YELLOW}请确认代理信息:${NC}"
+  echo "$proxy_str"
+  echo
+  
+  read -p "是否保存此配置？(y/N): " confirm
+  if [[ $confirm != "y" && $confirm != "Y" ]]; then
+    echo -e "${YELLOW}已取消配置${NC}"
+    return 0
+  fi
+  
+  # 保存配置
+  cat > dynamic_proxy.conf <<EOF
+# 动态代理配置
+$proxy_str
+EOF
+  
+  echo -e "${GREEN}✓ 代理配置已保存到 dynamic_proxy.conf${NC}"
+  
+  # 应用到系统
+  apply_proxy_config
+}
+
+# 应用到系统
+apply_proxy_config() {
+  if [[ ! -f "dynamic_proxy.conf" ]]; then
+    echo -e "${RED}✗ 代理配置文件不存在${NC}"
+    return 1
+  fi
+  
+  proxy_line=$(grep -v '^#' dynamic_proxy.conf | head -1)
+  
+  # 解析代理字符串
+  if [[ "$proxy_line" == http* ]]; then
+    # 格式: http://user:pass@ip:port
+    protocol="http"
+    # 提取IP、端口、用户名、密码
+    temp="${proxy_line#http://}"
+    user_pass="${temp%@*}"
+    ip_port="${temp#*@}"
+    
+    IFS=':' read -r user pass <<< "$user_pass"
+    IFS=':' read -r ip port <<< "$ip_port"
+  else
+    # 格式: ip:port:user:pass
+    IFS=':' read -r ip port user pass <<< "$proxy_line"
+    protocol="http"
+  fi
+  
+  if [[ -z "$ip" || -z "$port" || -z "$user" || -z "$pass" ]]; then
+    echo -e "${RED}✗ 代理配置格式错误${NC}"
+    return 1
+  fi
+  
+  # 创建 proxychains 配置
+  sudo tee /etc/proxychains.conf > /dev/null <<EOF
+strict_chain
+proxy_dns
+remote_dns_subnet 224
+tcp_read_time_out 15000
+tcp_connect_time_out 8000
+localnet 127.0.0.0/255.0.0.0
+
+[ProxyList]
+$protocol $ip $port $user $pass
+EOF
+
+  echo -e "${GREEN}✓ 代理配置已应用到系统${NC}"
+  echo -e "${BLUE}代理信息:${NC}"
+  echo "协议: $protocol"
+  echo "地址: $ip:$port"
+  echo "用户: $user"
+  echo -e "${GREEN}配置完成！${NC}"
 }
 
 # 3) 测试代理连接
 test_proxy() {
-  # ... 保持原有代码不变 ...
+  echo -e "${YELLOW}测试代理连接...${NC}"
+  
+  if [[ ! -f "dynamic_proxy.conf" ]]; then
+    echo -e "${RED}请先配置代理${NC}"
+    return 1
+  fi
+  
+  echo -e "${GREEN}正在测试代理连接（最多10秒）...${NC}"
+  
+  # 直接测试，完全静默
+  if timeout 10 proxychains -q curl -s ipinfo.io/ip >/tmp/proxy_test_ip.txt 2>/dev/null; then
+    local ip=$(cat /tmp/proxy_test_ip.txt)
+    echo -e "${GREEN}✅ 代理连接成功！${NC}"
+    echo -e "${BLUE}当前公网IP: $ip${NC}"
+  else
+    echo -e "${YELLOW}⚠️ 代理连接测试超时${NC}"
+    echo -e "${YELLOW}但代理配置已生效，可以尝试直接使用${NC}"
+  fi
+  
+  rm -f /tmp/proxy_test_ip.txt
+  echo
 }
 
 # 4) 修复 Miden 客户端配置
 fix_miden_client() {
-    # ... 保持原有代码不变，但修改为连接本地节点 ...
+    echo -e "${YELLOW}修复 Miden 客户端配置...${NC}"
+    
+    # 设置环境变量
+    export PATH="$HOME/.cargo/bin:$PATH"
+    echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
+    source ~/.bashrc
+    
+    # 重新初始化客户端 - 连接到本地节点
     echo -e "${YELLOW}初始化 Miden 客户端...${NC}"
     miden init --rpc http://localhost:57291 --network testnet 2>/dev/null || true
+    
+    # 验证安装
+    if command -v miden &>/dev/null; then
+        echo -e "${GREEN}✅ Miden 客户端已正确配置${NC}"
+        version=$(get_miden_version)
+        echo -e "${BLUE}客户端版本: $version${NC}"
+    else
+        echo -e "${RED}❌ Miden 客户端配置失败${NC}"
+        echo -e "${YELLOW}尝试重新安装...${NC}"
+        install_deps
+    fi
 }
 
 # 5) 生成钱包地址（使用代理路由）
@@ -258,22 +547,39 @@ gen_wallets() {
         return 1
     fi
     
+    # 确保日志目录和文件存在
+    mkdir -p "$LOG_DIR"
+    touch "$LOG_FILE"
+    chmod 755 "$LOG_DIR" 2>/dev/null || true
+    chmod 644 "$LOG_FILE" 2>/dev/null || true
+    
     read -p "生成多少个钱包？(默认10) > " total
     total=${total:-10}
     
     echo -e "${YELLOW}开始生成 $total 个钱包...${NC}"
-    echo -e "${GREEN}使用智能路由模式...${NC}"
     
-    # 使用代理路由生成钱包
+    # 检查代理路由配置
     if [[ -f "$PROXY_ROUTER_CONF" ]]; then
         echo -e "${BLUE}🔗 通过代理路由生成钱包${NC}"
+        # 测试代理路由是否有效
+        if ! grep -qE "^http\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\s+[0-9]+\s+[^\s]+\s+[^\s]+" "$PROXY_ROUTER_CONF" 2>/dev/null; then
+            echo -e "${RED}❌ 代理路由配置格式错误，使用直连模式${NC}"
+            USE_PROXY=false
+        else
+            USE_PROXY=true
+            echo -e "${GREEN}✅ 代理路由配置有效${NC}"
+        fi
     else
         echo -e "${YELLOW}⚠️ 使用直连模式生成钱包${NC}"
+        USE_PROXY=false
     fi
     
     success_count=0
     failed_count=0
     current_dir=$(pwd)
+    
+    # 清空之前的钱包列表
+    > "$ACCOUNTS_DIR/batch_accounts.txt"
     
     for ((i=1;i<=total;i++)); do
         echo -e "\n${BLUE}=== 生成钱包 $i/$total ===${NC}"
@@ -286,21 +592,27 @@ gen_wallets() {
             continue
         }
         
-        # 使用代理路由初始化（如果配置了）
-        if [[ -f "$PROXY_ROUTER_CONF" ]]; then
+        # 使用代理路由初始化（如果配置了且有效）
+        if [[ "$USE_PROXY" == "true" ]]; then
             echo -e "${YELLOW}通过代理路由初始化...${NC}"
-            proxychains -q -f "$PROXY_ROUTER_CONF" miden init --rpc http://localhost:57291 --network testnet 2>&1 | tee -a "$LOG_FILE"
+            if ! proxychains -q -f "$PROXY_ROUTER_CONF" miden init --rpc http://localhost:57291 --network testnet > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2); then
+                echo -e "${YELLOW}代理路由失败，尝试直连...${NC}"
+                miden init --rpc http://localhost:57291 --network testnet > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
+            fi
         else
             echo -e "${YELLOW}直连初始化...${NC}"
-            miden init --rpc http://localhost:57291 --network testnet 2>&1 | tee -a "$LOG_FILE"
+            miden init --rpc http://localhost:57291 --network testnet > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
         fi
         
         # 生成钱包
         echo -e "${YELLOW}创建钱包...${NC}"
-        if [[ -f "$PROXY_ROUTER_CONF" ]]; then
-            proxychains -q -f "$PROXY_ROUTER_CONF" miden new-wallet --deploy 2>&1 | tee -a "$LOG_FILE"
+        if [[ "$USE_PROXY" == "true" ]]; then
+            if ! proxychains -q -f "$PROXY_ROUTER_CONF" miden new-wallet --deploy > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2); then
+                echo -e "${YELLOW}代理创建失败，尝试直连创建...${NC}"
+                miden new-wallet --deploy > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
+            fi
         else
-            miden new-wallet --deploy 2>&1 | tee -a "$LOG_FILE"
+            miden new-wallet --deploy > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) || true
         fi
         
         # 获取地址
@@ -312,6 +624,11 @@ gen_wallets() {
         else
             ((failed_count++))
             echo -e "${YELLOW}⚠️ 钱包 $i 生成失败${NC}"
+            # 显示错误信息
+            if [[ -f "$LOG_FILE" ]]; then
+                echo -e "${YELLOW}最近错误信息:${NC}"
+                tail -5 "$LOG_FILE" | grep -i error 2>/dev/null || echo -e "${YELLOW}无具体错误信息${NC}"
+            fi
         fi
         
         cd "$current_dir" || break
@@ -323,11 +640,21 @@ gen_wallets() {
     done
     
     echo -e "\n${GREEN}生成完成！成功: $success_count/$total, 失败: $failed_count${NC}"
+    if [[ $success_count -gt 0 ]]; then
+        echo -e "${BLUE}钱包地址保存在: $ACCOUNTS_DIR/batch_accounts.txt${NC}"
+    fi
 }
 
 # 6) 查看钱包列表
 view_wallets() {
-  # ... 保持原有代码不变 ...
+  if [[ -f "$ACCOUNTS_DIR/batch_accounts.txt" ]]; then
+    echo -e "${YELLOW}钱包地址列表:${NC}"
+    cat "$ACCOUNTS_DIR/batch_accounts.txt"
+    count=$(get_wallet_count)
+    echo -e "\n${GREEN}总计: $count 个钱包${NC}"
+  else
+    echo -e "${YELLOW}还没有生成钱包${NC}"
+  fi
 }
 
 # 7) 启动动态代理刷子（使用代理路由）
@@ -496,16 +823,27 @@ EOF
   
   echo -e "${GREEN}动态代理刷子已启动！${NC}"
   echo -e "${YELLOW}日志文件: $LOG_FILE${NC}"
+  echo -e "${YELLOW}进程ID: $(cat $PID_FILE)${NC}"
 }
 
 # 8) 停止刷子
 stop_brush() {
-  # ... 保持原有代码不变 ...
+  if [[ -f $PID_FILE ]]; then
+    kill $(cat $PID_FILE) 2>/dev/null && echo -e "${GREEN}刷子已停止${NC}" || echo -e "${YELLOW}刷子进程已结束${NC}"
+    rm $PID_FILE
+  else
+    echo -e "${YELLOW}刷子未在运行${NC}"
+  fi
 }
 
 # 9) 查看实时日志
 view_logs() {
-  # ... 保持原有代码不变 ...
+  if [[ -f "$LOG_FILE" ]]; then
+    echo -e "${YELLOW}显示实时日志 (Ctrl+C 退出)...${NC}"
+    tail -f "$LOG_FILE"
+  else
+    echo -e "${YELLOW}日志文件不存在${NC}"
+  fi
 }
 
 # 主菜单
